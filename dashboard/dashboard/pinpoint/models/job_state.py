@@ -8,12 +8,15 @@ from __future__ import absolute_import
 
 import collections
 import functools
-from six.moves import http_client
 import logging
 
 from google.appengine.api import urlfetch_errors
 
+from six.moves import http_client
+from six.moves import map  # pylint: disable=redefined-builtin
+
 from dashboard.common import math_utils
+from dashboard.models import anomaly
 from dashboard.pinpoint.models import attempt as attempt_module
 from dashboard.pinpoint.models import change as change_module
 from dashboard.pinpoint.models import compare
@@ -25,7 +28,7 @@ from dashboard.pinpoint.models import exploration
 MIN_ATTEMPTS = 10
 MAX_ATTEMPTS = 160
 MAX_BUILDS = 30
-_DEFAULT_SPECULATION_LEVELS = 2
+_DEFAULT_SPECULATION_LEVELS = 1
 
 FUNCTIONAL = 'functional'
 PERFORMANCE = 'performance'
@@ -33,7 +36,7 @@ TRY = 'try'
 COMPARISON_MODES = (FUNCTIONAL, PERFORMANCE, TRY)
 
 
-class JobState(object):
+class JobState:
   """The internal state of a Job.
 
   Wrapping the entire internal state of a Job in a PickleProperty allows us to
@@ -46,7 +49,8 @@ class JobState(object):
                quests,
                comparison_mode=None,
                comparison_magnitude=None,
-               pin=None):
+               pin=None,
+               initial_attempt_count=None):
     """Create a JobState.
 
     Args:
@@ -57,6 +61,7 @@ class JobState(object):
           to look for. Smaller magnitudes require more repeats.
       quests: A sequence of quests to run on each Change.
       pin: A Change (Commits + Patch) to apply to every Change in this Job.
+      initial_attempt_count: The number of attempts (iterations) to try first.
     """
     # _quests is mutable. Any modification should mutate the existing list
     # in-place rather than assign a new list, because every Attempt references
@@ -65,6 +70,9 @@ class JobState(object):
 
     self._comparison_mode = comparison_mode
     self._comparison_magnitude = comparison_magnitude
+    # only bisections and verification jobs care about the improvement direction
+    # assume unknown until specified
+    self._improvement_direction = anomaly.UNKNOWN
 
     self._pin = pin
 
@@ -74,6 +82,7 @@ class JobState(object):
 
     # A mapping from a Change to a list of Attempts on that Change.
     self._attempts = {}
+    self._initial_attempt_count = initial_attempt_count if initial_attempt_count else MIN_ATTEMPTS
 
   def PropagateJob(self, job):
     """Propagate a Job to every Quest.
@@ -90,6 +99,10 @@ class JobState(object):
       return 'Failure rate'
     return self._quests[-1].metric if self._quests else ''
 
+  @property
+  def attempt_count(self):
+    return self._initial_attempt_count
+
   def AddAttempts(self, change):
     if not hasattr(self, '_pin'):
       # TODO: Remove after data migration.
@@ -103,7 +116,10 @@ class JobState(object):
     # This algorithm will double the number of attempts, to allow us to get
     # more attempts sooner and getting to better statistical decisions with
     # less iterations.
-    current_attempt_count = max(len(self._attempts[change]), MIN_ATTEMPTS)
+    initial_attempt_count = self._initial_attempt_count if hasattr(
+        self, '_initial_attempt_count') else MIN_ATTEMPTS
+    current_attempt_count = max(
+        len(self._attempts[change]), initial_attempt_count)
     it = 0
     while it != current_attempt_count:
       attempt = attempt_module.Attempt(self._quests, change_with_pin)
@@ -120,9 +136,10 @@ class JobState(object):
     self.AddAttempts(change)
 
     if len(self._changes) > MAX_BUILDS:
-      raise errors.BuildCancelled("""The number of builds exceeded %d. Aborting Job.
-            Consult https://chromium.googlesource.com/catapult/+/HEAD/dashboard/dashboard/pinpoint/docs/abort_error.md
-            for suggestions on next steps.""" % MAX_BUILDS)
+      raise errors.BuildNumberExceeded(MAX_BUILDS)
+
+  def SetImprovementDirection(self, improvement_direction):
+    self._improvement_direction = improvement_direction
 
   def Explore(self):
     """Compare Changes and bisect by adding additional Changes as needed.
@@ -193,8 +210,10 @@ class JobState(object):
     for attempts in self._attempts.values():
       for attempt in attempts:
         if attempt.completed:
+          logging.debug('JobQueueDebug: attempt completed. %s', attempt)
           continue
 
+        logging.debug('JobQueueDebug: attempt scheduling new work. %s', attempt)
         attempt.ScheduleWork()
         work_left = True
 
@@ -316,8 +335,8 @@ class JobState(object):
 
     any_unknowns = False
     for quest in self._quests:
-      executions_a = executions_by_quest_a[quest]
-      executions_b = executions_by_quest_b[quest]
+      executions_a = executions_by_quest_a[str(quest)]
+      executions_b = executions_by_quest_b[str(quest)]
 
       # Compare exceptions.
       exceptions_a = tuple(
@@ -332,6 +351,9 @@ class JobState(object):
             comparison_magnitude = 0.5
         else:
           comparison_magnitude = 1.0
+
+        logging.debug('BisectDebug: Functional Comparing exceptions: %s, %s',
+            exceptions_a, exceptions_b)
         comparison, _, _, _ = compare.Compare(
             exceptions_a,
             exceptions_b,
@@ -339,9 +361,10 @@ class JobState(object):
             FUNCTIONAL,
             comparison_magnitude,
         )
+        logging.debug('BisectDebug: Functional Compare result: %s', comparison)
         if comparison == compare.DIFFERENT:
           return compare.DIFFERENT
-        elif comparison == compare.UNKNOWN:
+        if comparison == compare.UNKNOWN:
           any_unknowns = True
 
       # Compare result values by consolidating all measurments by change, and
@@ -365,6 +388,20 @@ class JobState(object):
           comparison_magnitude = 1.0
 
         sample_count = (len(all_a_values) + len(all_b_values)) // 2
+        logging.debug('BisectDebug: Comparing values: %s, %s',
+            all_a_values, all_b_values)
+        mean_diff = Mean(all_b_values) - Mean(all_a_values)
+        # Pinpoint jobs that exist prior to this change will not
+        # have an improvement direction. See crbug/1351167#c4
+        if not getattr(self, '_improvement_direction', None):
+          self._improvement_direction = anomaly.UNKNOWN
+        # if improvement, return same
+        if ((mean_diff > 0 and self._improvement_direction == anomaly.UP)
+            or mean_diff < 0 and self._improvement_direction == anomaly.DOWN):
+          logging.debug(
+              'BisectDebug: Improvement found. Improvement direction: %s, mean diff: %s',
+              self._improvement_direction, mean_diff)
+          return compare.SAME
         comparison, _, _, _ = compare.Compare(
             all_a_values,
             all_b_values,
@@ -372,9 +409,10 @@ class JobState(object):
             PERFORMANCE,
             comparison_magnitude,
         )
+        logging.debug('BisectDebug: Compare result: %s', comparison)
         if comparison == compare.DIFFERENT:
           return compare.DIFFERENT
-        elif comparison == compare.UNKNOWN:
+        if comparison == compare.UNKNOWN:
           any_unknowns = True
 
     if any_unknowns:
@@ -404,6 +442,12 @@ class JobState(object):
   def ChangesExamined(self):
     return len(self._changes)
 
+  def TotalAttemptsExecuted(self):
+    total_attempts = 0
+    for attempts in self._attempts.values():
+      total_attempts += len(attempts)
+    return total_attempts
+
   def FirstOrLastChangeFailed(self):
     """Did all attempts complete and fail for the first or last change?"""
     if not self._changes:
@@ -425,7 +469,7 @@ def _ExecutionsPerQuest(attempts):
   executions = collections.defaultdict(list)
   for attempt in attempts:
     for quest, execution in zip(attempt.quests, attempt.executions):
-      executions[quest].append(execution)
+      executions[str(quest)].append(execution)
   return executions
 
 

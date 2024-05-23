@@ -9,8 +9,8 @@ import subprocess
 import sys
 import logging
 
-import py_utils
-from telemetry.internal.util import ps_util
+from PIL import ImageGrab  # pylint: disable=import-error
+
 from telemetry.core import os_version as os_version_module
 from telemetry import decorators
 from telemetry.internal.platform import posix_platform_backend
@@ -18,7 +18,7 @@ from telemetry.internal.platform import posix_platform_backend
 
 class MacPlatformBackend(posix_platform_backend.PosixPlatformBackend):
   def __init__(self):
-    super(MacPlatformBackend, self).__init__()
+    super().__init__()
 
   def GetSystemLog(self):
     try:
@@ -79,18 +79,23 @@ class MacPlatformBackend(posix_platform_backend.PosixPlatformBackend):
       return os_version_module.BIGSUR
     if os_version.startswith('21.'):
       return os_version_module.MONTEREY
+    if os_version.startswith('22.'):
+      return os_version_module.VENTURA
+    if os_version.startswith('23.'):
+      return os_version_module.SONOMA
 
     raise NotImplementedError('Unknown mac version %s.' % os_version)
 
   def GetTypExpectationsTags(self):
     # telemetry benchmarks expectations need to know if the version number
     # of the operating system is 10.12 or 10.13
-    tags = super(MacPlatformBackend, self).GetTypExpectationsTags()
+    tags = super().GetTypExpectationsTags()
     detail_string = self.GetOSVersionDetailString()
     if detail_string.startswith('10.11'):
       tags.append('mac-10.11')
     elif detail_string.startswith('10.12'):
       tags.append('mac-10.12')
+    tags.append('mac-' + os.uname()[4])
     return tags
 
   @decorators.Cache
@@ -105,18 +110,10 @@ class MacPlatformBackend(posix_platform_backend.PosixPlatformBackend):
     return True
 
   def TakeScreenshot(self, file_path):
-    # crbug.com/1036447. screencapture could hang and eventually cause timeout
-    # TODO(crbug.com/984504): use built-in timeout for subprocess in python 3
-    timeout_in_sec = 10
-    try:
-      args = ['screencapture', file_path]
-      sp = ps_util.RunSubProcWithTimeout(
-          args, timeout_in_sec, 'screencapture')
-      return sp.returncode
-    except py_utils.TimeoutException:
-      logging.warning(
-          'Screenshot did not finish after $ds.' % timeout_in_sec)
-    return None
+    image = ImageGrab.grab()
+    with open(file_path, 'wb') as f:
+      image.save(f, 'PNG')
+    return True
 
   def CanFlushIndividualFilesFromSystemCache(self):
     return False

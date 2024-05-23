@@ -6,12 +6,11 @@ from __future__ import print_function
 from __future__ import division
 from __future__ import absolute_import
 
+from flask import Flask
 import json
 import mock
 import unittest
 import uuid
-import webapp2
-import webtest
 
 from dashboard import uploads_info
 from dashboard.api import api_auth
@@ -27,14 +26,19 @@ def SetInternalUserOAuth(mock_oauth):
   mock_oauth.get_client_id.return_value = api_auth.OAUTH_CLIENT_ID_ALLOWLIST[0]
 
 
+flask_app = Flask(__name__)
+
+
+@flask_app.route('/uploads/<token_id>')
+def UploadsInfoGet(token_id):
+  return uploads_info.UploadsInfoGet(token_id)
+
+
 class UploadInfo(testing_common.TestCase):
 
   def setUp(self):
-    super(UploadInfo, self).setUp()
-    app = webapp2.WSGIApplication([
-        ('/uploads/(.+)', uploads_info.UploadInfoHandler),
-    ])
-    self.testapp = webtest.TestApp(app)
+    super().setUp()
+    self.SetUpFlaskApp(flask_app)
 
     testing_common.SetIsInternalUser('foo@bar.com', True)
     self.SetCurrentUser('foo@bar.com')
@@ -163,9 +167,7 @@ class UploadInfo(testing_common.TestCase):
         ]
     }
     response = self.GetFullInfoRequest(token_id)
-    expected['measurements'].sort()
-    response['measurements'].sort()
-    self.assertEqual(response, expected)
+    self.assertCountEqual(expected, response)
 
   def testGet_SuccessWithMeasurementsAndAssociatedHistogram(self):
     owners_diagnostic = generic_set.GenericSet(['owner_name'])
@@ -255,9 +257,7 @@ class UploadInfo(testing_common.TestCase):
         },]
     }
     response = self.GetFullInfoRequest(token_id)
-    expected['measurements'][0]['dimensions'].sort()
-    response['measurements'][0]['dimensions'].sort()
-    self.assertEqual(response, expected)
+    self.assertCountEqual(expected, response)
 
   def testGet_SuccessLimitedInfo(self):
     token_id = str(uuid.uuid4())

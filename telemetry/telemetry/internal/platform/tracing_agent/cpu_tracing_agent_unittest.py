@@ -20,7 +20,7 @@ SNAPSHOT_KEYS = ['pid', 'ppid', 'name', 'pCpu', 'pMem']
 TRACE_EVENT_KEYS = ['name', 'tid', 'pid', 'ph', 'args', 'local', 'id', 'ts']
 
 
-class FakeAndroidPlatformBackend(object):
+class FakeAndroidPlatformBackend():
   def __init__(self):
     self.device = 'fake_device'
 
@@ -33,7 +33,6 @@ class CpuTracingAgentTest(unittest.TestCase):
   def setUp(self):
     self._config = tracing_config.TracingConfig()
     self._config.enable_cpu_trace = True
-    # pylint: disable=redefined-variable-type
     if sys.platform.startswith('win'):
       self._desktop_backend = win_platform_backend.WinPlatformBackend()
     elif sys.platform.startswith('darwin'):
@@ -122,12 +121,11 @@ class CpuTracingAgentTest(unittest.TestCase):
       data = builder.AsData().GetTraceFor(
           trace_data.CPU_TRACE_DATA)['traceEvents']
 
-    self.assertEquals(set(data[0].keys()), set(TRACE_EVENT_KEYS))
-    self.assertEquals(set(data[0]['args']['snapshot'].keys()),
-                      {'processes'})
+    self.assertEqual(set(data[0].keys()), set(TRACE_EVENT_KEYS))
+    self.assertEqual(set(data[0]['args']['snapshot'].keys()), {'processes'})
     self.assertTrue(data[0]['args']['snapshot']['processes'])
-    self.assertEquals(set(data[0]['args']['snapshot']['processes'][0].keys()),
-                      set(SNAPSHOT_KEYS))
+    self.assertEqual(set(data[0]['args']['snapshot']['processes'][0].keys()),
+                     set(SNAPSHOT_KEYS))
 
   # Flaky on Win (crbug.com/803210).
   @decorators.Enabled('linux', 'mac')
@@ -167,7 +165,7 @@ class CpuTracingAgentTest(unittest.TestCase):
     proc_collector.Init()
     proc = proc_collector._ParseProcessString(
         '0 1 Multi Word Process 50 75')
-    self.assertEquals(proc['ppid'], 0)
-    self.assertEquals(proc['pid'], 1)
-    self.assertEquals(proc['name'], 'Multi Word Process')
-    self.assertEquals(proc['pCpu'], 50)
+    self.assertEqual(proc['ppid'], 0)
+    self.assertEqual(proc['pid'], 1)
+    self.assertEqual(proc['name'], 'Multi Word Process')
+    self.assertEqual(proc['pCpu'], 50)

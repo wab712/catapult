@@ -16,71 +16,30 @@
 # Doc: https://www.gnu.org/software/bash/manual/html_node/The-Set-Builtin.html#The-Set-Builtin
 set -xu
 
+HELPER_PATH="/tmpfs/src/github/src/gsutil/test/ci/kokoro/run_integ_tests_helper.sh"
 
-# PYMAJOR, PYMINOR, and API environment variables are set per job in:
-# go/kokoro-gsutil-configs
-PYVERSION="$PYMAJOR.$PYMINOR"
+# Set the locale to utf-8 for macos b/154863917 and linux
+# https://github.com/GoogleCloudPlatform/gsutil/pull/1692
+if [[ $KOKORO_JOB_NAME =~ "linux" ]]; then
+  export LANG=C.UTF-8
+  export LC_ALL=C.UTF-8
+  # Kokoro for linux runs in a Docker container as root, which causes
+  # few tests to fail. See b/281868063.
+  # Add a new user.
+  # -s: Set the login shell.
+  useradd -s /bin/bash tester
 
-# Processes to use based on default Kokoro specs here:
-# go/gcp-ubuntu-vm-configuration-v32i
-# go/kokoro-macos-external-configuration
-PROCS="8"
+  # Make this user the owner of /tmpfs/src and /root dirs so that restricted
+  # files can be accessed.
+  chown -hR tester: /tmpfs/src/
+  chown -hR tester: /root/
 
-GSUTIL_KEY="/tmpfs/src/keystore/74008_gsutil_kokoro_service_key"
-GSUTIL_SRC="/tmpfs/src/github/src/gsutil"
-GSUTIL_ENTRYPOINT="$GSUTIL_SRC/gsutil.py"
-CFG_GENERATOR="$GSUTIL_SRC/test/ci/kokoro/config_generator.sh"
-BOTO_CONFIG="/tmpfs/src/.boto_$API"
-
-# gsutil looks for this environment variable to find .boto config
-# https://cloud.google.com/storage/docs/boto-gsutil
-export BOTO_PATH="$BOTO_CONFIG"
-
-function latest_python_release {
-  # Return string with latest Python version triplet for a given version tuple.
-  # Example: PYVERSION="2.7"; latest_python_release -> "2.7.15"
-  pyenv install --list \
-    | grep -vE "(^Available versions:|-src|dev|rc|alpha|beta|(a|b)[0-9]+)" \
-    | grep -E "^\s*$PYVERSION" \
-    | sed 's/^\s\+//' \
-    | tail -1
-}
-
-function install_python {
-  pyenv update
-  pyenv install -s "$PYVERSIONTRIPLET"
-}
-
-function init_configs {
-  # Create .boto config for gsutil
-  # https://cloud.google.com/storage/docs/gsutil/commands/config
-  bash "$CFG_GENERATOR" "$GSUTIL_KEY" "$API" "$BOTO_CONFIG"
-  cat "$BOTO_CONFIG"
-}
-
-function init_python {
-  # Ensure latest release of desired Python version is installed, and that
-  # dependencies from pip, e.g. crcmod, are installed.
-  PYVERSIONTRIPLET=$(latest_python_release)
-  install_python
-  pyenv global "$PYVERSIONTRIPLET"
-  python -m pip install -U crcmod
-}
-
-function update_submodules {
-  # Most dependencies are included in gsutil via submodules. We need to
-  # tell git to grab our dependencies' source before we can depend on them.
-  cd "$GSUTIL_SRC"
-  git submodule update --init --recursive
-}
-
-
-init_configs
-init_python
-update_submodules
-
-# Check that we're using the correct config
-python "$GSUTIL_ENTRYPOINT" version -l
-# Run integration tests
-python "$GSUTIL_ENTRYPOINT" test -p "$PROCS"
+  # Call the script as the new user.
+  # -E: Preserve the environment variables.
+  sudo -E -u tester bash "$HELPER_PATH"
+elif [[ $KOKORO_JOB_NAME =~ "macos" ]]; then
+  export LANG=en_US.UTF-8
+  export LC_ALL=en_US.UTF-8
+  bash "$HELPER_PATH"
+fi
 

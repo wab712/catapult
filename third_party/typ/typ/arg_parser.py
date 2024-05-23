@@ -54,7 +54,8 @@ class ArgumentParser(argparse.ArgumentParser):
                               help='Print the typ version and exit.')
 
         if discovery:
-            self.add_argument('-f', '--file-list', metavar='FILENAME',
+            self.add_argument('-f', '--file-list', '--test-list',
+                              metavar='FILENAME',
                               action='store',
                               help=('Takes the list of tests from the file '
                                     '(use "-" for stdin).'))
@@ -76,7 +77,8 @@ class ArgumentParser(argparse.ArgumentParser):
                               help=('Builder name to include in the '
                                     'uploaded data.'))
             self.add_argument('-c', '--coverage', action='store_true',
-                              help='Reports coverage information.')
+                              help=('Reports coverage information. This is '
+                                    'disabled when a test filter is used.'))
             self.add_argument('--coverage-source', action='append',
                               default=[],
                               help=('Directories to include when running and '
@@ -129,6 +131,17 @@ class ArgumentParser(argparse.ArgumentParser):
                               help=('Explicitly disable ResultSink integration '
                                     'instead of automatically determining '
                                     'based off LUCI_CONTEXT.'))
+            self.add_argument('--rdb-content-output-file',
+                              type=str,
+                              metavar='FILENAME',
+                              action='store',
+                              help=('Write ResultSink POST content to the '
+                                    'given file in jsonl instead of actually '
+                                    'POSTing, where each test result is '
+                                    'represented as a json string in a new line.'
+                                    'This is only intended as a workaround for '
+                                    'Skylab where native ResultSink '
+                                    'integration is not currently possible.'))
             self.add_argument('tests', nargs='*', default=[],
                               help=argparse.SUPPRESS)
 
@@ -139,6 +152,11 @@ class ArgumentParser(argparse.ArgumentParser):
                               default=self._host.cpu_count(),
                               help=('Runs N jobs in parallel '
                                     '(defaults to %(default)s).'))
+            self.add_argument('--stable-jobs', action='store_true',
+                              default=False,
+                              help='When multiple jobs are used, round-robin '
+                                   'assignment of test inputs so the job '
+                                   'assignment is stable regardless of runtime.')
             self.add_argument('-l', '--list-only', action='store_true',
                               help='Lists all the test names found and exits.')
             self.add_argument('-n', '--dry-run', action='store_true',
@@ -218,6 +236,10 @@ class ArgumentParser(argparse.ArgumentParser):
                               type=str,
                               metavar='PATH',
                               help='directory to write output to (ignored)')
+            self.add_argument('--use-global-pool', action='store_true',
+                              default=False,
+                              help=('Use the older, single/global process pool '
+                                    'approach instead of the scoped approach.'))
 
         if discovery or running:
             self.add_argument('-P', '--path', action='append', default=[],
@@ -238,7 +260,8 @@ class ArgumentParser(argparse.ArgumentParser):
                 type=str, default='', action='store',
                 help='Pass a double-colon-separated ("::") list of exact test '
                 'names or globs, to run just that subset of tests. fnmatch will '
-                'be used to match globs to test names')
+                'be used to match globs to test names. Utilizing a filter will '
+                'disable coverage.')
             self.add_argument(
                 '--partial-match-filter', type=str, default=[], action='append',
                 help='Pass a string and Typ will run tests whose names '
@@ -297,6 +320,11 @@ class ArgumentParser(argparse.ArgumentParser):
 
         if rargs.overwrite is None:
             rargs.overwrite = self._host.stdout.isatty() and not rargs.verbose
+
+        if (rargs.test_filter and rargs.coverage):
+            # Running a subset of tests will fail coverage check, so explicitly
+            # disable coverage when a filter is passed.
+            rargs.coverage = False
 
         return rargs
 

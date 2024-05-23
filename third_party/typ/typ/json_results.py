@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from collections import OrderedDict
+from collections import OrderedDict, defaultdict
 
 import json
 
@@ -27,6 +27,22 @@ class ResultType(object):
 
     values = (Pass, Failure, Timeout, Crash, Skip)
 
+# Information about why a test failed.
+# Modelled after https://source.chromium.org/chromium/infra/infra/+/master:go/src/go.chromium.org/luci/resultdb/proto/v1/failure_reason.proto
+class FailureReason(object):
+    def __init__(self, primary_error_message):
+        """Initialises a new failure reason.
+
+        Args:
+            primary_error_message: The error message that ultimately caused
+                    the test to fail. This should/ only be the error message
+                    and should not include any stack traces. In the case that
+                    a test failed due to multiple expectation failures, any
+                    immediately fatal failure should be chosen, or otherwise
+                    the first expectation failure.
+        """
+        self.primary_error_message = primary_error_message
+
 
 class Result(object):
     # too many instance attributes  pylint: disable=R0902
@@ -35,7 +51,8 @@ class Result(object):
     def __init__(self, name, actual, started, took, worker,
                  expected=None, unexpected=False,
                  flaky=False, code=0, out='', err='', pid=0,
-                 artifacts=None):
+                 file_path='', line_number=0,
+                 artifacts=None, failure_reason=None):
         self.name = name
         self.actual = actual
         self.started = started
@@ -50,6 +67,9 @@ class Result(object):
         self.pid = pid
         self.is_regression = actual != ResultType.Pass and unexpected
         self.artifacts = artifacts
+        self.file_path = file_path
+        self.line_number = line_number
+        self.failure_reason = failure_reason
         self.result_sink_retcode = 0
 
 
@@ -103,8 +123,12 @@ def make_full_results(metadata, seconds_since_epoch, all_test_names, results,
 
     full_results['tests'] = OrderedDict()
 
+    results_by_test_name = defaultdict(list)
+    for result in results.results:
+        results_by_test_name[result.name].append(result)
+
     for test_name in all_test_names:
-        value = _results_for_test(test_name, results)
+        value = _results_for_test(test_name, results_by_test_name)
         _add_path_to_trie(
             full_results['tests'], test_name, value, test_separator)
         if value.get('is_regression'):
@@ -131,15 +155,61 @@ def exit_code_from_full_results(full_results):
 
 
 def num_failures(full_results):
-    return full_results['num_failures_by_type']['FAIL']
+    return full_results['num_failures_by_type'][ResultType.Failure]
 
 
 def num_passes(full_results):
-    return full_results['num_failures_by_type']['PASS']
+    return full_results['num_failures_by_type'][ResultType.Pass]
 
 
 def num_skips(full_results):
-    return full_results['num_failures_by_type']['SKIP']
+    return full_results['num_failures_by_type'][ResultType.Skip]
+
+
+def num_regressions(full_results):
+    return full_results['num_regressions']
+
+
+def passing_tests_names(full_results):
+    return _get_test_names_for_result_type(full_results, ResultType.Pass)
+
+
+def skipped_tests_names(full_results):
+    return _get_test_names_for_result_type(full_results, ResultType.Skip)
+
+
+def failed_tests_names(full_results):
+    return _get_test_names_for_result_type(full_results, ResultType.Failure)
+
+
+def crashed_tests_names(full_results):
+    return _get_test_names_for_result_type(full_results, ResultType.Crash)
+
+
+def timed_out_tests_names(full_results):
+    return _get_test_names_for_result_type(full_results, ResultType.Timeout)
+
+
+def regressed_tests_names(full_results):
+    return set(tn for tn, r in iterate_over_trie(
+        full_results['tests'], full_results['path_delimiter'], '')
+               if r.get('is_regression', False))
+
+
+def _get_test_names_for_result_type(full_results, result_type):
+    return set(tn for tn, r in iterate_over_trie(
+        full_results['tests'], full_results['path_delimiter'], '')
+               if result_type in r['actual'])
+
+
+def iterate_over_trie(trie, test_separator, path):
+    if 'actual' in trie and 'times' in trie:
+        yield path, trie
+    else:
+        for k, v in trie.items():
+            p = path + test_separator + k if path else k
+            for tn, r in iterate_over_trie(v, test_separator, p):
+                yield tn, r
 
 
 def regressions(results):
@@ -169,48 +239,47 @@ def _crashing_test_names(results):
 def _timed_out_test_names(results):
     return set(r.name for r in results.results if r.actual == ResultType.Timeout)
 
-def _results_for_test(test_name, results):
+def _results_for_test(test_name, results_by_test_name):
     value = OrderedDict()
     actuals = []
     times = []
-    for r in results.results:
-        if r.name == test_name:
-            if r.actual in ResultType.values:
-                actuals.append(r.actual)
-            else:
-                raise ValueError('%r is not a valid result' % r.actual)
+    for r in results_by_test_name[test_name]:
+        if r.actual in ResultType.values:
+            actuals.append(r.actual)
+        else:
+            raise ValueError('%r is not a valid result' % r.actual)
 
-            # The time a test takes is a floating point number of seconds;
-            # if we were to encode this unmodified, then when we converted it
-            # to JSON it might make the file significantly larger. Instead
-            # we truncate the file to ten-thousandths of a second, which is
-            # probably more than good enough for most tests.
-            times.append(round(r.took, 4))
+        # The time a test takes is a floating point number of seconds;
+        # if we were to encode this unmodified, then when we converted it
+        # to JSON it might make the file significantly larger. Instead
+        # we truncate the file to ten-thousandths of a second, which is
+        # probably more than good enough for most tests.
+        times.append(round(r.took, 4))
 
-            # A given test may be run more than one time; if so, whether
-            # a result was unexpected or a regression is based on the result
-            # of the *last* time it was run.
-            if r.unexpected:
-                value['is_unexpected'] = r.unexpected
-                if r.is_regression:
-                    value['is_regression'] = True
-            else:
-                if 'is_unexpected' in value:
-                    value.pop('is_unexpected')
-                if 'is_regression' in value:
-                    value.pop('is_regression')
+        # A given test may be run more than one time; if so, whether
+        # a result was unexpected or a regression is based on the result
+        # of the *last* time it was run.
+        if r.unexpected:
+            value['is_unexpected'] = r.unexpected
+            if r.is_regression:
+                value['is_regression'] = True
+        else:
+            if 'is_unexpected' in value:
+                value.pop('is_unexpected')
+            if 'is_regression' in value:
+                value.pop('is_regression')
 
-            # This assumes that the expected values are the same for every
-            # invocation of the test.
-            value['expected'] = ' '.join(sorted(r.expected))
+        # This assumes that the expected values are the same for every
+        # invocation of the test.
+        value['expected'] = ' '.join(sorted(r.expected))
 
-            # Handle artifacts
-            if not r.artifacts:
-                continue
-            if 'artifacts' not in value:
-                value['artifacts'] = {}
-            for artifact_name, artifacts in r.artifacts.items():
-                value['artifacts'].setdefault(artifact_name, []).extend(artifacts)
+        # Handle artifacts
+        if not r.artifacts:
+            continue
+        if 'artifacts' not in value:
+            value['artifacts'] = {}
+        for artifact_name, artifacts in r.artifacts.items():
+            value['artifacts'].setdefault(artifact_name, []).extend(artifacts)
 
     if not actuals:  # pragma: untested
         actuals.append('SKIP')

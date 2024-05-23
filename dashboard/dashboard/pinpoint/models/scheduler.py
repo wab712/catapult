@@ -21,10 +21,14 @@ import collections
 import datetime
 import functools
 import random
+import logging
 
+from google.appengine.api import app_identity
 from google.appengine.ext import ndb
 
 from dashboard.common import bot_configurations
+from dashboard.common import cloud_metric
+from dashboard.pinpoint import models
 
 SECS_PER_HOUR = datetime.timedelta(hours=1).total_seconds()
 DEFAULT_BUDGET = 1.0
@@ -62,7 +66,6 @@ class SampleElementTiming(ndb.Model):
 
 class Queues(ndb.Model):
   """A root element for all queues."""
-  pass
 
 
 class ConfigurationQueue(ndb.Model):
@@ -110,7 +113,7 @@ class ConfigurationQueue(ndb.Model):
     ]
     if len(self.samples) > 50:
       self.samples = random.sample(self.samples, 50)
-    super(ConfigurationQueue, self).put()
+    super().put()
 
 
 class Error(Exception):
@@ -160,6 +163,11 @@ def Schedule(job, cost=1.0):
           priority=priority,
           cost=cost))
   queue.put()
+  cloud_metric.PublishPinpointJobStatusMetric(
+      app_identity.get_application_id(), job.job_id,
+      job.comparison_mode, "queued", job.user, job.origin,
+      models.job.GetJobTypeByName(job.name), job.configuration,
+      job.benchmark_arguments.benchmark, job.benchmark_arguments.story)
 
 
 @ndb.transactional
@@ -203,7 +211,7 @@ def PickJobs(configuration, budget=1.0):
   # Sort the jobs in priority and submission time. Note that we can starve lower
   # priority (those whose priority is higher than 0) jobs by design, since we'll
   # assume those are batch jobs.
-  queue.jobs.sort(key=lambda j: (j.priority, j.timestamp))
+  queue.jobs.sort(key=lambda j: (j.priority or 0, j.timestamp))
   for job in queue.jobs:
     # Short-circuit out if the budget is not exhausted.
     if budget <= 0.0:
@@ -244,6 +252,7 @@ def QueueStats(configuration):
   queue = ConfigurationQueue.get_by_id(
       configuration, parent=ndb.Key('Queues', 'root'))
   if not queue:
+    logging.warning('Failed to find queue for configuration: %s', configuration)
     raise QueueNotFound()
 
   def StatCombiner(status_map, job):
@@ -266,6 +275,21 @@ def QueueStats(configuration):
   })
   return result
 
+@ndb.transactional
+def IsStopped(job):
+  """Checks if a job has stopped or not. Jobs should be stopped if
+  their status in the job queue is not Running or Queued."""
+
+  # Take a job and determine the FIFO Queue it's associated to.
+  configuration = job.arguments.get('configuration', '(none)')
+
+  # Iterate through the queue and see if job is either running or queued
+  queue = ConfigurationQueue.GetOrCreateQueue(configuration)
+  for queued_job in queue.jobs:
+    if queued_job.job_id == job.job_id:
+      if queued_job.status in {'Running', 'Queued'}:
+        return False
+  return True
 
 @ndb.transactional
 def Cancel(job):

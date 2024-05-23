@@ -24,7 +24,7 @@ from telemetry.util import wpr_modes
 
 class MockPage(page_module.Page):
   def __init__(self, story_set, url):
-    super(MockPage, self).__init__(url=url,
+    super().__init__(url=url,
                                    page_set=story_set,
                                    base_dir=util.GetUnittestDataDir(),
                                    name=url)
@@ -39,14 +39,16 @@ class MockPage(page_module.Page):
 
 class MockStorySet(story.StorySet):
   def __init__(self, url=''):
-    super(MockStorySet, self).__init__(
+    if url == '':
+      return
+    super().__init__(
         archive_data_file='data/archive_files/test.json')
     self.AddStory(MockPage(self, url))
 
 
 class MockPageTest(legacy_page_test.LegacyPageTest):
   def __init__(self):
-    super(MockPageTest, self).__init__()
+    super().__init__()
     self._action_name_to_run = "RunPageInteractions"
     self.func_calls = []
 
@@ -73,16 +75,16 @@ class MockBenchmark(benchmark.Benchmark):
   test = MockPageTest
 
   def __init__(self):
-    super(MockBenchmark, self).__init__()
+    super().__init__()
     self.mock_story_set = None
 
   @classmethod
-  def AddBenchmarkCommandLineArgs(cls, group):
-    group.add_option('', '--mock-benchmark-url', action='store', type='string')
+  def AddBenchmarkCommandLineArgs(cls, parser):
+    parser.add_option('', '--mock-benchmark-url', action='store', type='string')
 
   def CreateStorySet(self, options):
     kwargs = {}
-    if options.mock_benchmark_url:
+    if hasattr(options, 'mock_benchmark_url') and options.mock_benchmark_url:
       kwargs['url'] = options.mock_benchmark_url
     self.mock_story_set = MockStorySet(**kwargs)
     return self.mock_story_set
@@ -94,12 +96,12 @@ class MockBenchmark(benchmark.Benchmark):
 class MockTimelineBasedMeasurementBenchmark(benchmark.Benchmark):
 
   def __init__(self):
-    super(MockTimelineBasedMeasurementBenchmark, self).__init__()
+    super().__init__()
     self.mock_story_set = None
 
   @classmethod
-  def AddBenchmarkCommandLineArgs(cls, group):
-    group.add_option('', '--mock-benchmark-url', action='store', type='string')
+  def AddBenchmarkCommandLineArgs(cls, parser):
+    parser.add_option('', '--mock-benchmark-url', action='store', type='string')
 
   def CreateStorySet(self, options):
     kwargs = {}
@@ -160,7 +162,7 @@ class RecordWprUnitTests(tab_test_case.TabTestCase):
 
   def GetBrowserDeviceFlags(self):
     flags = ['--browser', self._browser.browser_type,
-             '--remote', self._test_options.cros_remote,
+             '--remote', self._test_options.remote,
              '--device', self._device]
     if self._browser.browser_type == 'exact':
       flags += ['--browser-executable', self._test_options.browser_executable]
@@ -225,9 +227,9 @@ class RecordWprUnitTests(tab_test_case.TabTestCase):
     with record_wpr.WprRecorder(ProjectConfig(self._test_data_dir),
                                 MockBenchmark(), flags) as wpr_recorder:
       # page_runner command-line args
-      self.assertEquals(2, wpr_recorder.options.pageset_repeat)
+      self.assertEqual(2, wpr_recorder.options.pageset_repeat)
       # benchmark command-line args
-      self.assertEquals(self._url, wpr_recorder.options.mock_benchmark_url)
+      self.assertEqual(self._url, wpr_recorder.options.mock_benchmark_url)
       # record_wpr command-line arg to upload to cloud-storage.
       self.assertTrue(wpr_recorder.options.upload)
       # --extra-option added from Benchmark.SetExtraBrowserOptions()
@@ -235,6 +237,16 @@ class RecordWprUnitTests(tab_test_case.TabTestCase):
                       wpr_recorder.options.browser_options.extra_browser_args)
       # invalid command-line args
       self.assertFalse(hasattr(wpr_recorder.options, 'not_a_real_option'))
+
+  def testCommandLineFlagParsingSkipped(self):
+    flags = [
+        '--pageset-repeat', '2',
+        '--mock-benchmark-url', self._url,
+        '--upload',
+    ]
+    with record_wpr.WprRecorder(ProjectConfig(self._test_data_dir),
+                                MockBenchmark(), flags, False) as wpr_recorder:
+      self.assertFalse(hasattr(wpr_recorder.options, 'mock_benchmark_url'))
 
   def testRecordingEnabled(self):
     flags = ['--mock-benchmark-url', self._url]

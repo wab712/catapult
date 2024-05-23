@@ -50,13 +50,13 @@ class BrowserTest(browser_test_case.BrowserTestCase):
     existing_tab_url = existing_tab.url
 
     new_tab = self._browser.tabs.New()
-    self.assertEquals(num_tabs + 1, len(self._browser.tabs))
-    self.assertEquals(existing_tab.url, existing_tab_url)
-    self.assertEquals(new_tab.url, 'about:blank')
+    self.assertEqual(num_tabs + 1, len(self._browser.tabs))
+    self.assertEqual(existing_tab.url, existing_tab_url)
+    self.assertEqual(new_tab.url, 'about:blank')
 
     new_tab.Close()
-    self.assertEquals(num_tabs, len(self._browser.tabs))
-    self.assertEquals(existing_tab.url, existing_tab_url)
+    self.assertEqual(num_tabs, len(self._browser.tabs))
+    self.assertEqual(existing_tab.url, existing_tab_url)
 
   def testMultipleTabCalls(self):
     self._browser.tabs[0].Navigate(self.UrlOfUnittestFile('blank.html'))
@@ -74,7 +74,7 @@ class BrowserTest(browser_test_case.BrowserTestCase):
     tab = self._browser.tabs[0]
     tab.Navigate(self.UrlOfUnittestFile('blank.html'))
     tab.Close()
-    self.assertEquals(num_initial_tabs, len(self._browser.tabs))
+    self.assertEqual(num_initial_tabs, len(self._browser.tabs))
 
   @decorators.Enabled('has tabs')
   def testForegroundTab(self):
@@ -135,6 +135,7 @@ class BrowserTest(browser_test_case.BrowserTestCase):
     info_b = self._browser.GetSystemInfo()
     self.assertFalse(info_a is info_b)
 
+  @decorators.Disabled('mac') # https://crbug.com/1286458
   def testSystemInfoModelNameOnMac(self):
     if self._browser.platform.GetOSName() != 'mac':
       self.skipTest('This test is only run on macOS')
@@ -147,7 +148,10 @@ class BrowserTest(browser_test_case.BrowserTestCase):
       return
 
     model_name_re = r"[a-zA-Z]* [0-9.]*"
-    self.assertNotEqual(re.match(model_name_re, info.model_name), None)
+    self.assertNotEqual(
+        re.match(model_name_re, info.model_name),
+        None,
+        'Invalid Mac model name: %s' % info.model_name)
 
   @decorators.Enabled('android')
   def testGetAppUi(self):
@@ -169,8 +173,8 @@ class CommandLineBrowserTest(browser_test_case.BrowserTestCase):
     t = self._browser.tabs[0]
     t.Navigate(self.UrlOfUnittestFile('blank.html'))
     t.WaitForDocumentReadyStateToBeInteractiveOrBetter()
-    self.assertEquals(t.EvaluateJavaScript('navigator.userAgent'),
-                      'telemetry')
+    self.assertEqual(t.EvaluateJavaScript('navigator.userAgent'), 'telemetry')
+
 
 class DirtyProfileBrowserTest(browser_test_case.BrowserTestCase):
   @classmethod
@@ -179,7 +183,7 @@ class DirtyProfileBrowserTest(browser_test_case.BrowserTestCase):
 
   @decorators.Disabled('chromeos')  # crbug.com/243912
   def testDirtyProfileCreation(self):
-    self.assertEquals(1, len(self._browser.tabs))
+    self.assertEqual(1, len(self._browser.tabs))
 
 
 class BrowserLoggingTest(browser_test_case.BrowserTestCase):
@@ -238,7 +242,7 @@ class TestBrowserCreation(unittest.TestCase):
     with self.browser_to_create.BrowserSession(self.browser_options) as browser:
       tab = browser.tabs.New()
       tab.Navigate('about:blank')
-      self.assertEquals(2, tab.EvaluateJavaScript('1 + 1'))
+      self.assertEqual(2, tab.EvaluateJavaScript('1 + 1'))
 
   def testCreateWithBadOptionsRaises(self):
     with self.assertRaises(AssertionError):
@@ -254,7 +258,7 @@ class TestBrowserCreation(unittest.TestCase):
         browser = self.browser_to_create.Create()
         tab = browser.tabs.New()
         tab.Navigate('about:blank')
-        self.assertEquals(2, tab.EvaluateJavaScript('1 + 1'))
+        self.assertEqual(2, tab.EvaluateJavaScript('1 + 1'))
         browser.Close()
     finally:
       self.browser_to_create.CleanUpEnvironment()
@@ -268,7 +272,7 @@ class TestBrowserCreation(unittest.TestCase):
     with self.browser_to_create.BrowserSession(self.browser_options) as browser:
       tab = browser.tabs.New()
       tab.Navigate('about:blank')
-      self.assertEquals(2, tab.EvaluateJavaScript('1 + 1'))
+      self.assertEqual(2, tab.EvaluateJavaScript('1 + 1'))
     after_browser_run_temp_dir_content = os.listdir(tempfile.tempdir)
     self.assertEqual(before_browser_run_temp_dir_content,
                      after_browser_run_temp_dir_content)

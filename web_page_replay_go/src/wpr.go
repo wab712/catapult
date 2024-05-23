@@ -20,7 +20,7 @@ import (
 	"time"
 
 	"github.com/catapult-project/catapult/web_page_replay_go/src/webpagereplay"
-	"github.com/urfave/cli"
+	"github.com/urfave/cli/v2"
 	"golang.org/x/net/http2"
 )
 
@@ -50,7 +50,7 @@ const longUsage = `
 
 type CertConfig struct {
 	// Flags common to all commands.
-	certFile, keyFile string
+	certFile, keyFile, certType string
 }
 
 type CommonConfig struct {
@@ -64,7 +64,7 @@ type CommonConfig struct {
 	injectScripts                            string
 
 	// Computed state.
-	root_cert    tls.Certificate
+	root_certs   []tls.Certificate
 	transformers []webpagereplay.ResponseTransformer
 }
 
@@ -92,16 +92,16 @@ type RootCACommand struct {
 
 func (certCfg *CertConfig) Flags() []cli.Flag {
 	return []cli.Flag{
-		cli.StringFlag{
+		&cli.StringFlag{
 			Name:        "https_cert_file",
-			Value:       "wpr_cert.pem",
-			Usage:       "File containing a PEM-encoded X509 certificate to use with SSL.",
+			Value:       "",
+			Usage:       "File containing 1 or more comma separated PEM-encoded X509 certificates to use with SSL.",
 			Destination: &certCfg.certFile,
 		},
-		cli.StringFlag{
+		&cli.StringFlag{
 			Name:        "https_key_file",
-			Value:       "wpr_key.pem",
-			Usage:       "File containing a PEM-encoded private key to use with SSL.",
+			Value:       "",
+			Usage:       "File containing 1 or more comma separated PEM-encoded private keys to use with SSL.",
 			Destination: &certCfg.keyFile,
 		},
 	}
@@ -109,31 +109,31 @@ func (certCfg *CertConfig) Flags() []cli.Flag {
 
 func (common *CommonConfig) Flags() []cli.Flag {
 	return append(common.certConfig.Flags(),
-		cli.StringFlag{
+		&cli.StringFlag{
 			Name:        "host",
 			Value:       "localhost",
 			Usage:       "IP address to bind all servers to. Defaults to localhost if not specified.",
 			Destination: &common.host,
 		},
-		cli.IntFlag{
+		&cli.IntFlag{
 			Name:        "http_port",
 			Value:       -1,
 			Usage:       "Port number to listen on for HTTP requests, 0 to use any port, or -1 to disable.",
 			Destination: &common.httpPort,
 		},
-		cli.IntFlag{
+		&cli.IntFlag{
 			Name:        "https_port",
 			Value:       -1,
 			Usage:       "Port number to listen on for HTTPS requests, 0 to use any port, or -1 to disable.",
 			Destination: &common.httpsPort,
 		},
-		cli.IntFlag{
+		&cli.IntFlag{
 			Name:        "https_to_http_port",
 			Value:       -1,
 			Usage:       "Port number to listen on for HTTP proxy requests over an HTTPS connection, 0 to use any port, or -1 to disable.",
 			Destination: &common.httpSecureProxyPort,
 		},
-		cli.StringFlag{
+		&cli.StringFlag{
 			Name:  "inject_scripts",
 			Value: "deterministic.js",
 			Usage: "A comma separated list of JavaScript sources to inject in all pages. " +
@@ -145,26 +145,45 @@ func (common *CommonConfig) Flags() []cli.Flag {
 	)
 }
 
+func (certCfg *CertConfig) CheckArgs(c *cli.Context) error {
+	if certCfg.certFile == "" && certCfg.keyFile == "" {
+		certCfg.certFile = "wpr_cert.pem,ecdsa_cert.pem"
+		certCfg.keyFile = "wpr_key.pem,ecdsa_key.pem"
+	}
+	return nil
+}
+
 func (common *CommonConfig) CheckArgs(c *cli.Context) error {
-	if len(c.Args()) > 1 {
+	if c.Args().Len() > 1 {
 		return errors.New("too many args")
 	}
-	if len(c.Args()) != 1 {
+	if c.Args().Len() != 1 {
 		return errors.New("must specify archive_file")
 	}
 	if common.httpPort == -1 && common.httpsPort == -1 && common.httpSecureProxyPort == -1 {
 		return errors.New("must specify at least one port flag")
 	}
 
-	// Load common configs.
-	log.Printf("Loading cert from %v\n", common.certConfig.certFile)
-	log.Printf("Loading key from %v\n", common.certConfig.keyFile)
-	var err error
-	common.root_cert, err = tls.LoadX509KeyPair(common.certConfig.certFile, common.certConfig.keyFile)
+	err := common.certConfig.CheckArgs(c)
 	if err != nil {
-		return fmt.Errorf("error opening cert or key files: %v", err)
+		return err
 	}
 
+	// Load certFiles.
+	certFiles := strings.Split(common.certConfig.certFile, ",")
+	keyFiles := strings.Split(common.certConfig.keyFile, ",")
+	if len(certFiles) != len(keyFiles) {
+		return fmt.Errorf("list of cert files given should match list of key files")
+	}
+	for i := 0; i < len(certFiles); i++ {
+		log.Printf("Loading cert from %v\n", certFiles[i])
+		log.Printf("Loading key from %v\n", keyFiles[i])
+		root_cert, err := tls.LoadX509KeyPair(certFiles[i], keyFiles[i])
+		if err != nil {
+			return fmt.Errorf("error opening cert or key files: %v", err)
+		}
+		common.root_certs = append(common.root_certs, root_cert)
+	}
 	return nil
 }
 
@@ -191,13 +210,13 @@ func (r *RecordCommand) Flags() []cli.Flag {
 
 func (r *ReplayCommand) Flags() []cli.Flag {
 	return append(r.common.Flags(),
-		cli.StringFlag{
+		&cli.StringFlag{
 			Name:        "rules_file",
 			Value:       "",
 			Usage:       "File containing rules to apply to responses during replay",
 			Destination: &r.rulesFile,
 		},
-		cli.BoolFlag{
+		&cli.BoolFlag{
 			Name: "serve_response_in_chronological_sequence",
 			Usage: "When an incoming request matches multiple recorded " +
 				"responses, serve response in chronological sequence. " +
@@ -206,12 +225,12 @@ func (r *ReplayCommand) Flags() []cli.Flag {
 				"second recorded response.",
 			Destination: &r.serveResponseInChronologicalSequence,
 		},
-		cli.BoolFlag{
+		&cli.BoolFlag{
 			Name:        "disable_fuzzy_url_matching",
 			Usage:       "When doing playback, require URLs to match exactly.",
 			Destination: &r.disableFuzzyURLMatching,
 		},
-		cli.BoolFlag{
+		&cli.BoolFlag{
 			Name: "quiet_mode",
 			Usage: "quiets the logging output by not logging the " +
 				"ServeHTTP url call and responses",
@@ -221,13 +240,13 @@ func (r *ReplayCommand) Flags() []cli.Flag {
 
 func (r *RootCACommand) Flags() []cli.Flag {
 	return append(r.certConfig.Flags(),
-		cli.StringFlag{
+		&cli.StringFlag{
 			Name:        "android_device_id",
 			Value:       "",
 			Usage:       "Device id of an android device. Only relevant for Android",
 			Destination: &r.installer.AndroidDeviceId,
 		},
-		cli.StringFlag{
+		&cli.StringFlag{
 			Name:        "adb_binary_path",
 			Value:       "adb",
 			Usage:       "Path to adb binary. Only relevant for Android",
@@ -238,7 +257,7 @@ func (r *RootCACommand) Flags() []cli.Flag {
 		// deploy certutil binaries to <chromium src>/third_party/nss/certutil.
 		// To accommodate chromium bots, the following flag accepts a custom path to
 		// certutil. Otherwise WPR assumes that certutil resides in the PATH.
-		cli.StringFlag{
+		&cli.StringFlag{
 			Name:        "certutil_path",
 			Value:       "certutil",
 			Usage:       "Path to Network Security Services (NSS)'s certutil tool.",
@@ -355,7 +374,7 @@ func logServeStarted(scheme string, ln net.Listener) {
 	log.Printf("Starting server on %s://%s", scheme, ln.Addr().String())
 }
 
-func (r *RecordCommand) Run(c *cli.Context) {
+func (r *RecordCommand) Run(c *cli.Context) error {
 	archiveFileName := c.Args().First()
 	archive, err := webpagereplay.OpenWritableArchive(archiveFileName)
 	if err != nil {
@@ -387,15 +406,16 @@ func (r *RecordCommand) Run(c *cli.Context) {
 
 	httpHandler := webpagereplay.NewRecordingProxy(archive, "http", r.common.transformers)
 	httpsHandler := webpagereplay.NewRecordingProxy(archive, "https", r.common.transformers)
-	tlsconfig, err := webpagereplay.RecordTLSConfig(r.common.root_cert, archive)
+	tlsconfig, err := webpagereplay.RecordTLSConfig(r.common.root_certs, archive)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error creating TLSConfig: %v", err)
 		os.Exit(1)
 	}
 	startServers(tlsconfig, httpHandler, httpsHandler, &r.common)
+	return nil
 }
 
-func (r *ReplayCommand) Run(c *cli.Context) {
+func (r *ReplayCommand) Run(c *cli.Context) error {
 	archiveFileName := c.Args().First()
 	log.Printf("Loading archive file from %s\n", archiveFileName)
 	archive, err := webpagereplay.OpenArchive(archiveFileName)
@@ -436,24 +456,27 @@ func (r *ReplayCommand) Run(c *cli.Context) {
 
 	httpHandler := webpagereplay.NewReplayingProxy(archive, "http", r.common.transformers, r.quietMode)
 	httpsHandler := webpagereplay.NewReplayingProxy(archive, "https", r.common.transformers, r.quietMode)
-	tlsconfig, err := webpagereplay.ReplayTLSConfig(r.common.root_cert, archive)
+	tlsconfig, err := webpagereplay.ReplayTLSConfig(r.common.root_certs, archive)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error creating TLSConfig: %v", err)
 		os.Exit(1)
 	}
 	startServers(tlsconfig, httpHandler, httpsHandler, &r.common)
+	return nil
 }
 
-func (r *RootCACommand) Install(c *cli.Context) {
+func (r *RootCACommand) Install(c *cli.Context) error {
 	if err := r.installer.InstallRoot(
 		r.certConfig.certFile, r.certConfig.keyFile); err != nil {
 		fmt.Fprintf(os.Stderr, "Install root failed: %v", err)
 		os.Exit(1)
 	}
+	return nil
 }
 
-func (r *RootCACommand) Remove(c *cli.Context) {
+func (r *RootCACommand) Remove(c *cli.Context) error {
 	r.installer.RemoveRoot()
+	return nil
 }
 
 func main() {
@@ -484,6 +507,7 @@ func main() {
 		Name:   "installroot",
 		Usage:  "Install a test root CA",
 		Flags:  installroot.Flags(),
+		Before: installroot.certConfig.CheckArgs,
 		Action: installroot.Install,
 	}
 
@@ -491,24 +515,12 @@ func main() {
 		Name:   "removeroot",
 		Usage:  "Remove a test root CA",
 		Flags:  removeroot.Flags(),
+		Before: removeroot.certConfig.CheckArgs,
 		Action: removeroot.Remove,
 	}
 
-	// TODO(xunjieli): Remove ConvertorCommand once crbug.com/730036 is done.
-	type ConvertorCommand struct {
-		cfg webpagereplay.ConvertorConfig
-		cmd cli.Command
-	}
-	var convert ConvertorCommand
-	convert.cmd = cli.Command{
-		Name:   "convert",
-		Flags:  convert.cfg.Flags(),
-		Usage:  "Convert a legacy format to the new format",
-		Action: convert.cfg.Convert,
-	}
-
 	app := cli.NewApp()
-	app.Commands = []cli.Command{record.cmd, replay.cmd, installroot.cmd, removeroot.cmd, convert.cmd}
+	app.Commands = []*cli.Command{&record.cmd, &replay.cmd, &installroot.cmd, &removeroot.cmd}
 	app.Usage = "Web Page Replay"
 	app.UsageText = fmt.Sprintf(longUsage, progName, progName)
 	app.HideVersion = true

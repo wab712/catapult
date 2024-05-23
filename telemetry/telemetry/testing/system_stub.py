@@ -18,7 +18,7 @@ import traceback
 import six
 
 
-class Override(object):
+class Override():
 
   _overidden_modules = set()
 
@@ -63,7 +63,7 @@ class Override(object):
       self.os.path.sys = self.sys
 
   def __del__(self):
-    assert not len(self._overrides)
+    assert not self._overrides
 
   def Restore(self):
     for module_name, original_module in six.iteritems(self._overrides):
@@ -79,7 +79,7 @@ class Override(object):
     self._base_module = None
 
 
-class AdbDevice(object):
+class AdbDevice():
 
   def __init__(self):
     self.has_root = False
@@ -117,7 +117,7 @@ class AdbDevice(object):
     self.system_properties[property_name] = property_value
 
 
-class CloudStorageModuleStub(object):
+class CloudStorageModuleStub():
   PUBLIC_BUCKET = 'chromium-telemetry'
   PARTNER_BUCKET = 'chrome-partner-telemetry'
   INTERNAL_BUCKET = 'chrome-telemetry'
@@ -162,10 +162,10 @@ class CloudStorageModuleStub(object):
   def CheckPermissionLevelForBucket(self, bucket):
     if bucket == CloudStorageModuleStub.PUBLIC_BUCKET:
       return
-    elif (self.permission_level ==
-          CloudStorageModuleStub.CREDENTIALS_ERROR_PERMISSION):
+    if (self.permission_level ==
+        CloudStorageModuleStub.CREDENTIALS_ERROR_PERMISSION):
       raise CloudStorageModuleStub.CredentialsError()
-    elif bucket == CloudStorageModuleStub.PARTNER_BUCKET:
+    if bucket == CloudStorageModuleStub.PARTNER_BUCKET:
       if self.permission_level < CloudStorageModuleStub.PARTNER_PERMISSION:
         raise CloudStorageModuleStub.PermissionError()
     elif bucket == CloudStorageModuleStub.INTERNAL_BUCKET:
@@ -275,7 +275,7 @@ class CloudStorageModuleStub(object):
     return self.local_hash_files[hash_path]
 
 
-class LoggingStub(object):
+class LoggingStub():
   def __init__(self):
     self.warnings = []
     self.errors = []
@@ -313,8 +313,8 @@ class LoggingStub(object):
     self.warning(msg, *args)
 
 
-class OpenFunctionStub(object):
-  class FileStub(object):
+class OpenFunctionStub():
+  class FileStub():
     def __init__(self, data):
       self._data = data
 
@@ -327,8 +327,7 @@ class OpenFunctionStub(object):
     def read(self, size=None):
       if size:
         return self._data[:size]
-      else:
-        return self._data
+      return self._data
 
     def write(self, data):
       self._data.write(data)
@@ -343,12 +342,12 @@ class OpenFunctionStub(object):
     return OpenFunctionStub.FileStub(self.files[name])
 
 
-class OsModuleStub(object):
-  class OsEnvironModuleStub(object):
+class OsModuleStub():
+  class OsEnvironModuleStub():
     def get(self, _):
       return None
 
-  class OsPathModuleStub(object):
+  class OsPathModuleStub():
     def __init__(self, sys_module):
       self.sys = sys_module
       self.files = []
@@ -367,8 +366,7 @@ class OsModuleStub(object):
       def IsAbsolutePath(path):
         if self.sys.platform.startswith('win'):
           return re.match('[a-zA-Z]:\\\\', path)
-        else:
-          return path.startswith('/')
+        return path.startswith('/')
 
       # Per Python specification, if any component is an absolute path,
       # discard previous components.
@@ -378,17 +376,15 @@ class OsModuleStub(object):
           break
 
       if self.sys.platform.startswith('win'):
-        tmp = os.path.join(*paths)
+        tmp = os.path.join(*paths)  # pylint:disable=no-value-for-parameter
         return tmp.replace('/', '\\')
-      else:
-        tmp = os.path.join(*paths)
-        return tmp.replace('\\', '/')
+      tmp = os.path.join(*paths) # pylint:disable=no-value-for-parameter
+      return tmp.replace('\\', '/')
 
     def basename(self, path):
       if self.sys.platform.startswith('win'):
         return ntpath.basename(path)
-      else:
-        return posixpath.basename(path)
+      return posixpath.basename(path)
 
     @staticmethod
     def abspath(path):
@@ -460,8 +456,8 @@ class OsModuleStub(object):
       yield top, dir_name, self._directory[dir_name]
 
 
-class PerfControlModuleStub(object):
-  class PerfControlStub(object):
+class PerfControlModuleStub():
+  class PerfControlStub():
     def __init__(self, adb):
       pass
 
@@ -469,7 +465,7 @@ class PerfControlModuleStub(object):
     self.PerfControl = PerfControlModuleStub.PerfControlStub
 
 
-class RawInputFunctionStub(object):
+class RawInputFunctionStub():
   def __init__(self):
     self.input = ''
 
@@ -477,8 +473,8 @@ class RawInputFunctionStub(object):
     return self.input
 
 
-class SubprocessModuleStub(object):
-  class PopenStub(object):
+class SubprocessModuleStub():
+  class PopenStub():
     def __init__(self):
       self.communicate_result = ('', '')
       self.returncode_result = 0
@@ -501,13 +497,13 @@ class SubprocessModuleStub(object):
     pass
 
 
-class SysModuleStub(object):
+class SysModuleStub():
   def __init__(self):
     self.platform = ''
 
 
-class ThermalThrottleModuleStub(object):
-  class ThermalThrottleStub(object):
+class ThermalThrottleModuleStub():
+  class ThermalThrottleStub():
     def __init__(self, adb):
       pass
 

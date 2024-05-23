@@ -20,7 +20,7 @@ class SparseDiagnosticTest(testing_common.TestCase):
   """Test case for functions in SparseDiagnostic."""
 
   def setUp(self):
-    super(SparseDiagnosticTest, self).setUp()
+    super().setUp()
     self.SetCurrentUser('foo@bar.com', is_admin=True)
 
   def _AddMockData(self, test_key):

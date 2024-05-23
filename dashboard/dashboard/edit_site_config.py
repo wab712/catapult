@@ -20,6 +20,7 @@ from dashboard.common import stored_object
 from dashboard.common import utils
 from dashboard.common import xsrf
 
+
 _NOTIFICATION_EMAIL_BODY = """
 The configuration of %(hostname)s was changed by %(user)s.
 
@@ -38,85 +39,86 @@ Internal-only value diff:
 # The mailing list to which config change notifications are sent,
 # so that the team can keep an audit record of these changes.
 # The "gasper-alerts" address is a historic legacy and not important.
-_NOTIFICATION_ADDRESS = 'chrome-performance-monitoring-alerts@google.com'
+_NOTIFICATION_ADDRESS = 'browser-perf-engprod@google.com'
 _SENDER_ADDRESS = 'gasper-alerts@google.com'
 
+from flask import request, make_response
+# Handles editing of site config values stored with stored_entity.
 
-class EditSiteConfigHandler(request_handler.RequestHandler):
-  """Handles editing of site config values stored with stored_entity.
 
-  FIXME: One confusing aspect of this page is: If a namespaced config is set,
-  the non-namespaced configs are probably irrelevant bu tthe field is still
-  shown. Similarly, if a non-namespaced config is set, the namespaced config
-  fields are likely not needed, but they're shown.
-  """
+def EditSiteConfigHandlerGet():
+  """Renders the UI with the form."""
+  key = request.args.get('key')
+  if not key:
+    return request_handler.RequestHandlerRenderHtml('edit_site_config.html', {})
 
-  def get(self):
-    """Renders the UI with the form."""
-    key = self.request.get('key')
-    if not key:
-      self.RenderHtml('edit_site_config.html', {})
-      return
+  return_format = request.args.get('format')
 
-    value = stored_object.Get(key)
-    external_value = namespaced_stored_object.GetExternal(key)
-    internal_value = namespaced_stored_object.Get(key)
-    self.RenderHtml(
-        'edit_site_config.html', {
-            'key': key,
-            'value': _FormatJson(value),
-            'external_value': _FormatJson(external_value),
-            'internal_value': _FormatJson(internal_value),
-        })
+  value = stored_object.Get(key)
+  external_value = namespaced_stored_object.GetExternal(key)
+  internal_value = namespaced_stored_object.Get(key)
+  body = {
+      'key': key,
+      'value': _FormatJson(value),
+      'external_value': _FormatJson(external_value),
+      'internal_value': _FormatJson(internal_value),
+  }
+  if return_format == 'json':
+    res = make_response(body, 200)
+  else:
+    res = request_handler.RequestHandlerRenderHtml('edit_site_config.html',
+                                                   body)
 
-  @xsrf.TokenRequired
-  def post(self):
-    """Accepts posted values, makes changes, and shows the form again."""
-    key = self.request.get('key')
+  return res
 
-    if not utils.IsInternalUser():
-      self.RenderHtml(
-          'edit_site_config.html',
-          {'error': 'Only internal users can post to this end-point.'})
-      return
 
-    if not key:
-      self.RenderHtml('edit_site_config.html', {})
-      return
+@xsrf.TokenRequired
+def EditSiteConfigHandlerPost():
+  """Accepts posted values, makes changes, and shows the form again."""
+  key = request.values.get('key')
 
-    new_value_json = self.request.get('value').strip()
-    new_external_value_json = self.request.get('external_value').strip()
-    new_internal_value_json = self.request.get('internal_value').strip()
+  if not utils.IsInternalUser():
+    res = request_handler.RequestHandlerRenderHtml(
+        'edit_site_config.html',
+        {'error': 'Only internal users can post to this end-point.'})
+    return res
 
-    template_params = {
-        'key': key,
-        'value': new_value_json,
-        'external_value': new_external_value_json,
-        'internal_value': new_internal_value_json,
-    }
+  if not key:
+    return request_handler.RequestHandlerRenderHtml('edit_site_config.html', {})
 
-    try:
-      new_value = json.loads(new_value_json or 'null')
-      new_external_value = json.loads(new_external_value_json or 'null')
-      new_internal_value = json.loads(new_internal_value_json or 'null')
-    except ValueError:
-      template_params['error'] = 'Invalid JSON in at least one field.'
-      self.RenderHtml('edit_site_config.html', template_params)
-      return
+  new_value_json = request.values.get('value', '').strip()
+  new_external_value_json = request.values.get('external_value', '').strip()
+  new_internal_value_json = request.values.get('internal_value', '').strip()
 
-    old_value = stored_object.Get(key)
-    old_external_value = namespaced_stored_object.GetExternal(key)
-    old_internal_value = namespaced_stored_object.Get(key)
+  template_params = {
+      'key': key,
+      'value': new_value_json,
+      'external_value': new_external_value_json,
+      'internal_value': new_internal_value_json,
+  }
 
-    stored_object.Set(key, new_value)
-    namespaced_stored_object.SetExternal(key, new_external_value)
-    namespaced_stored_object.Set(key, new_internal_value)
+  try:
+    new_value = json.loads(new_value_json or 'null')
+    new_external_value = json.loads(new_external_value_json or 'null')
+    new_internal_value = json.loads(new_internal_value_json or 'null')
+  except ValueError:
+    template_params['error'] = 'Invalid JSON in at least one field.'
+    return request_handler.RequestHandlerRenderHtml('edit_site_config.html',
+                                                    template_params)
 
-    _SendNotificationEmail(key, old_value, old_external_value,
-                           old_internal_value, new_value, new_external_value,
-                           new_internal_value)
+  old_value = stored_object.Get(key)
+  old_external_value = namespaced_stored_object.GetExternal(key)
+  old_internal_value = namespaced_stored_object.Get(key)
 
-    self.RenderHtml('edit_site_config.html', template_params)
+  stored_object.Set(key, new_value)
+  namespaced_stored_object.SetExternal(key, new_external_value)
+  namespaced_stored_object.Set(key, new_internal_value)
+
+  _SendNotificationEmail(key, old_value, old_external_value, old_internal_value,
+                         new_value, new_external_value, new_internal_value)
+
+  return request_handler.RequestHandlerRenderHtml('edit_site_config.html',
+                                                  template_params)
 
 
 def _SendNotificationEmail(key, old_value, old_external_value,

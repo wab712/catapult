@@ -23,7 +23,6 @@ FakeEvent = collections.namedtuple('Event', ('type', 'status', 'payload'))
 def TaskStatusGetter(task_status, task, event, _):
   if event.type == 'test':
     task_status[task.id] = task.status
-  return None
 
 
 def UpdateTask(job, task_id, new_state, _):
@@ -31,10 +30,12 @@ def UpdateTask(job, task_id, new_state, _):
   task_module.UpdateTask(job, task_id, new_state=new_state)
 
 
+@mock.patch('dashboard.services.swarming.GetAliveBotsByDimensions',
+            mock.MagicMock(return_value=["a"]))
 class PopulateTests(test.TestCase):
 
   def setUp(self):
-    super(PopulateTests, self).setUp()
+    super().setUp()
     self.maxDiff = None
 
   def testPopulateAndEvaluateAdderGraph(self):
@@ -66,7 +67,9 @@ class PopulateTests(test.TestCase):
     self.assertEqual(1, accumulator.get('plus'))
 
   def testPouplateAndEvaluateGrowingGraph(self):
-    job = job_module.Job.New((), ())
+    with mock.patch('dashboard.services.swarming.GetAliveBotsByDimensions',
+                    mock.MagicMock(return_value=["a"])):
+      job = job_module.Job.New((), ())
     task_module.PopulateTaskGraph(
         job,
         task_module.TaskGraph(
@@ -103,7 +106,7 @@ class PopulateTests(test.TestCase):
       logging.debug('Evaluating: %s, %s, %s', task, event, accumulator)
       if task.task_type == 'revision':
         accumulator[task.id] = task.payload
-        return
+        return None
 
       if task.task_type == 'bisection':
         rev_positions = list(
@@ -147,6 +150,7 @@ class PopulateTests(test.TestCase):
             ])
 
           return [GraphExtender]
+      return None
 
     accumulator = task_module.Evaluate(job, None, ExplorationEvaluator)
     self.assertEqual(
@@ -175,7 +179,6 @@ class PopulateTests(test.TestCase):
     def CallCountEvaluator(task, event, accumulator):
       logging.debug('Evaluate(%s, %s, %s) called.', task.id, event, accumulator)
       calls[task.id] = calls.get(task.id, 0) + 1
-      return None
 
     task_module.Evaluate(job, 'test', CallCountEvaluator)
     self.assertDictEqual({
@@ -211,7 +214,6 @@ class PopulateTests(test.TestCase):
     def CycleEvaluator(task, event, accumulator):
       logging.debug('Evaluate(%s, %s, %s) called.', task.id, event, accumulator)
       calls[task.id] = calls.get(task.id, 0) + 1
-      return None
 
     task_module.Evaluate(job, 'test', CycleEvaluator)
     self.assertDictEqual({'node_0': 1, 'node_1': 1}, calls)
@@ -235,14 +237,17 @@ def TransitionEvaluator(job, task, event, accumulator):
 
   if task.status == event.get('current_state'):
     return [functools.partial(UpdateTask, job, task.id, event.get('new_state'))]
+  return None
 
 
 class EvaluateTest(test.TestCase):
 
   def setUp(self):
-    super(EvaluateTest, self).setUp()
+    super().setUp()
     self.maxDiff = None
-    self.job = job_module.Job.New((), ())
+    with mock.patch('dashboard.services.swarming.GetAliveBotsByDimensions',
+                    mock.MagicMock(return_value=["a"])):
+      self.job = job_module.Job.New((), ())
     task_module.PopulateTaskGraph(
         self.job,
         task_module.TaskGraph(
@@ -344,6 +349,7 @@ class EvaluateTest(test.TestCase):
                 ])
 
           return [GraphExtender]
+        return None
 
       task_module.Evaluate(self.job, {'target': 'task_0'},
                            AddExistingTaskEvaluator)
@@ -363,6 +369,7 @@ class EvaluateTest(test.TestCase):
                 ])
 
           return [GraphExtender]
+        return None
 
       task_module.Evaluate(self.job, {'target': 'task_0'},
                            AddExistingTaskEvaluator)

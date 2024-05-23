@@ -14,7 +14,7 @@ NOTE: We should minimise the dependencies from this module.
 
 # NOTE: Whenever you update any of the default values below, please also make
 # the same updates at the following locations:
-# * AnomalyConfig defined in ../proto/sheriff.proto
+# * AnomalyConfig defined in ../protobuf/sheriff.proto
 # * anomaly_configs_defaults defined in
 #   https://chrome-internal.googlesource.com/infra/infra_internal/+/HEAD/infra/config/subprojects/chromeperf-sheriffs.star
 
@@ -35,7 +35,7 @@ MIN_SEGMENT_SIZE = 6
 MIN_ABSOLUTE_CHANGE = 0
 
 # Minimum relative difference between medians before and after.
-MIN_RELATIVE_CHANGE = 0.01
+MIN_RELATIVE_CHANGE = 0.1
 
 # "Steppiness" is a number between 0 and 1 that indicates how similar the
 # shape is to a perfect step function, where 1 represents a step function.

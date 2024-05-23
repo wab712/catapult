@@ -6,6 +6,7 @@ from __future__ import print_function
 from __future__ import division
 from __future__ import absolute_import
 
+import datetime
 import logging
 import sys
 import time
@@ -17,6 +18,8 @@ from dashboard.common import utils
 from dashboard.common import datastore_hooks
 from dashboard.models import internal_only_model
 from dashboard.models import subscription
+
+from dateutil.relativedelta import relativedelta
 
 # A string to describe the magnitude of a change from zero to non-zero.
 FREAKIN_HUGE = 'zero-to-nonzero'
@@ -42,6 +45,13 @@ class Anomaly(internal_only_model.InternalOnlyModel):
 
   # The time the alert fired.
   timestamp = ndb.DateTimeProperty(indexed=True, auto_now_add=True)
+
+  @ndb.ComputedProperty
+  def expiry(self):  # pylint: disable=invalid-name
+    if self.timestamp:
+      return self.timestamp + relativedelta(years=3)
+
+    return datetime.datetime.utcnow() + relativedelta(years=3)
 
   # TODO(dberris): Remove these after migrating all issues to use the issues
   # repeated field, to allow an anomaly to be represented in multiple issues on
@@ -86,6 +96,8 @@ class Anomaly(internal_only_model.InternalOnlyModel):
   # We'd like to be able to query Alerts by Master, Bot, and Benchmark names.
   master_name = ndb.ComputedProperty(
       lambda self: utils.TestPath(self.test).split('/')[0], indexed=True)
+  # This is not the "bot_name" as in "the id of the physical hardware device in the perf lab"
+  # but rather the "bot_name" as in "the name of device configuration" e.g. "win-10-perf"
   bot_name = ndb.ComputedProperty(
       lambda self: utils.TestPath(self.test).split('/')[1], indexed=True)
   benchmark_name = ndb.ComputedProperty(
@@ -156,6 +168,9 @@ class Anomaly(internal_only_model.InternalOnlyModel):
   earliest_input_timestamp = ndb.DateTimeProperty()
   latest_input_timestamp = ndb.DateTimeProperty()
 
+  # Source generating this anomaly entity (eg: chromeperf, skia)
+  source = ndb.StringProperty(indexed=False)
+
   @property
   def percent_changed(self):
     """The percent change from before the anomaly to after."""
@@ -180,15 +195,13 @@ class Anomaly(internal_only_model.InternalOnlyModel):
     """Gets a string showing the percent change."""
     if abs(self.percent_changed) == sys.float_info.max:
       return FREAKIN_HUGE
-    else:
-      return '%.1f%%' % abs(self.percent_changed)
+    return '%.1f%%' % abs(self.percent_changed)
 
   def GetDisplayAbsoluteChanged(self):
     """Gets a string showing the absolute change."""
     if abs(self.absolute_delta) == sys.float_info.max:
       return FREAKIN_HUGE
-    else:
-      return '%f' % abs(self.absolute_delta)
+    return '%f' % abs(self.absolute_delta)
 
   def GetRefTestPath(self):
     if not self.ref_test:

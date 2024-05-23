@@ -6,14 +6,14 @@ from __future__ import print_function
 from __future__ import division
 from __future__ import absolute_import
 
-import itertools
-
 from dashboard.pinpoint.models import change as change_module
 from dashboard.pinpoint.models import evaluators
 from dashboard.pinpoint.models.tasks import find_isolate
 from dashboard.pinpoint.models.tasks import performance_bisection
 from dashboard.pinpoint.models.tasks import read_value
 from dashboard.pinpoint.models.tasks import run_test
+
+from six.moves import zip_longest
 
 
 class Serializer(evaluators.DispatchByTaskType):
@@ -67,7 +67,7 @@ class Serializer(evaluators.DispatchByTaskType):
   """
 
   def __init__(self):
-    super(Serializer, self).__init__({
+    super().__init__({
         'find_isolate':
             evaluators.SequenceEvaluator(
                 [find_isolate.Serializer(), TaskTransformer]),
@@ -89,7 +89,7 @@ class Serializer(evaluators.DispatchByTaskType):
     # single context. This way the transformers can output a canonical set
     # of transformations to build up the (global) context.
     local_context = {}
-    super(Serializer, self).__call__(task, event, local_context)
+    super().__call__(task, event, local_context)
 
     # What we expect to see in the local context is data in the following
     # form:
@@ -210,8 +210,9 @@ class Serializer(evaluators.DispatchByTaskType):
             ordered_states[index] = state
 
         # Merge in the comparisons as they appear for the ordered_states.
-        for state, comparison, result in itertools.izip_longest(
-            ordered_states, comparisons or [], result_values or []):
+        for state, comparison, result in zip_longest(ordered_states, comparisons
+                                                     or [], result_values
+                                                     or []):
           if state is None:
             continue
           if comparison is not None:
@@ -267,11 +268,11 @@ def TaskTransformer(task, _, context):
   }
   """
   if not context:
-    return None
+    return
 
   input_data = context.get(task.id)
   if not input_data:
-    return None
+    return
 
   result = {
       'state': {
@@ -307,10 +308,10 @@ def AnalysisTransformer(task, _, context):
   }
   """
   if not context:
-    return None
+    return
   task_data = context.get(task.id)
   if not task_data:
-    return None
+    return
   result = {
       'set_parameters': {
           'comparison_mode': task_data.get('comparison_mode'),

@@ -20,17 +20,17 @@ from typ import artifacts
 def ArtifactCompatibilityWrapperFactory(artifact_impl):
   if isinstance(artifact_impl, story_run.StoryRun):
     return TelemetryArtifactCompatibilityWrapper(artifact_impl)
-  elif isinstance(artifact_impl, artifacts.Artifacts):
+  if isinstance(artifact_impl, artifacts.Artifacts):
     return TypArtifactCompatibilityWrapper(artifact_impl)
-  elif isinstance(artifact_impl, FullLoggingArtifactImpl):
+  if isinstance(artifact_impl, FullLoggingArtifactImpl):
     return FullLoggingArtifactCompatibilityWrapper()
-  elif artifact_impl is None:
+  if artifact_impl is None:
     return LoggingArtifactCompatibilityWrapper()
   raise RuntimeError('Given unsupported artifact implementation %s' %
                      type(artifact_impl).__name__)
 
 
-class ArtifactCompatibilityWrapper(object):
+class ArtifactCompatibilityWrapper():
   def __init__(self, artifact_impl):
     self._artifact_impl = artifact_impl
 
@@ -77,7 +77,7 @@ class LoggingArtifactCompatibilityWrapper(ArtifactCompatibilityWrapper):
   the first 100 characters.
   """
   def __init__(self):
-    super(LoggingArtifactCompatibilityWrapper, self).__init__(None)
+    super().__init__(None)
 
   def CreateArtifact(self, name, data):
     # Don't log binary files as the utf-8 encoding will cause errors.
@@ -92,7 +92,7 @@ class LoggingArtifactCompatibilityWrapper(ArtifactCompatibilityWrapper):
     logging.info('Artifact with name %s: %s', name, data[:min(100, len(data))])
 
 
-class FullLoggingArtifactImpl(object):
+class FullLoggingArtifactImpl():
   """A dummy 'artifact implementation'.
 
   Used to specify that FullLoggingArtifactCompatibilityWrapper should be used
@@ -107,7 +107,7 @@ class FullLoggingArtifactCompatibilityWrapper(ArtifactCompatibilityWrapper):
   results in more log spam, hence why it is not the default.
   """
   def __init__(self):
-    super(FullLoggingArtifactCompatibilityWrapper, self).__init__(None)
+    super().__init__(None)
 
   def CreateArtifact(self, name, data):
     # Don't log binary files as the utf-8 encoding will cause errors.

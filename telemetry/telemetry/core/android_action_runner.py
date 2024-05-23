@@ -15,7 +15,7 @@ class ActionNotSupported(Exception):
   pass
 
 
-class AndroidActionRunner(object):
+class AndroidActionRunner():
   """Provides an API for interacting with an android device.
 
   This makes use of functionality provided by the android input command. None
@@ -75,11 +75,11 @@ class AndroidActionRunner(object):
     # work with space. Pass space character to account for strings with multiple
     # spaces.
     words = string.split(' ')
-    for i in range(0, len(words)):
+    for i, word in enumerate(words):
       if i != 0:
         self.InputKeyEvent(keyevent.KEYCODE_SPACE)
-      self._platform_backend.device.RunShellCommand(
-          ['input', 'text', words[i]], check_return=True)
+      self._platform_backend.device.RunShellCommand(['input', 'text', word],
+                                                    check_return=True)
 
   def InputKeyEvent(self, keycode):
     """Send a single key input to the device.

@@ -6,11 +6,7 @@ from __future__ import print_function
 from __future__ import division
 from __future__ import absolute_import
 
-try:
-  import cPickle
-except ImportError:
-  # pickle in python 3 uses the c version as cPickle in python 2.
-  import pickle as cPickle
+import six.moves.cPickle as cPickle
 import datetime
 import mock
 import unittest
@@ -26,7 +22,7 @@ from dashboard.common import testing_common
 class LayeredCacheTest(testing_common.TestCase):
 
   def setUp(self):
-    super(LayeredCacheTest, self).setUp()
+    super().setUp()
     self.UnsetCurrentUser()
     testing_common.SetIsInternalUser('internal@chromium.org', True)
     testing_common.SetIsInternalUser('foo@chromium.org', False)

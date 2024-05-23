@@ -13,7 +13,7 @@ from telemetry.testing import tab_test_case
 
 class PinchActionTest(tab_test_case.TabTestCase):
   def setUp(self):
-    super(PinchActionTest, self).setUp()
+    super().setUp()
     self.Navigate('zoom.html')
     utils.InjectJavaScript(self._tab, 'gesture_common.js')
 
@@ -91,7 +91,7 @@ class PinchActionTest(tab_test_case.TabTestCase):
   @decorators.Disabled('chromeos', 'linux', 'mac', 'win')
   def testPinchAnchor(self):
     starting_scale = self._tab.EvaluateJavaScript('window.visualViewport.scale')
-    self.assertEquals(1, starting_scale)
+    self.assertEqual(1, starting_scale)
 
     width = self._tab.EvaluateJavaScript('window.innerWidth')
     height = self._tab.EvaluateJavaScript('window.innerHeight')

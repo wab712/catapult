@@ -15,7 +15,7 @@ from telemetry.internal.platform import platform_backend
 
 class FuchsiaPlatformBackend(platform_backend.PlatformBackend):
   def __init__(self, device):
-    super(FuchsiaPlatformBackend, self).__init__(device)
+    super().__init__(device)
     if os.path.isfile(device.ssh_config):
       self._ssh_config = device.ssh_config
     else:
@@ -24,7 +24,8 @@ class FuchsiaPlatformBackend(platform_backend.PlatformBackend):
     self._command_runner = CommandRunner(
         self._ssh_config,
         device.host,
-        device.port)
+        device.port,
+        device.target_id)
     self._managed_repo = device.managed_repo
     self._detailed_os_version = None
     self._device_type = None
@@ -79,6 +80,11 @@ class FuchsiaPlatformBackend(platform_backend.PlatformBackend):
           ['cat', '/config/build-info/board'],
           stdout=subprocess.PIPE,
           stderr=subprocess.PIPE)
+
+    # Fuchsia changed its qemu-x64 board's name to x64, but for the sake of
+    # consistency we will still label it as qemu-x64
+    if self._device_type == 'x64':
+      self._device_type = 'qemu-x64'
     return 'fuchsia-board-' + self._device_type
 
   def GetOSVersionName(self):
@@ -108,7 +114,7 @@ class FuchsiaPlatformBackend(platform_backend.PlatformBackend):
                         elevate_privilege=False):
     raise NotImplementedError()
 
-  def PathExists(self, device_path, timeout=None, retries=None):
+  def PathExists(self, path, timeout=None, retries=None):
     raise NotImplementedError()
 
   def CanFlushIndividualFilesFromSystemCache(self):
@@ -139,6 +145,6 @@ class FuchsiaPlatformBackend(platform_backend.PlatformBackend):
     return None
 
   def GetTypExpectationsTags(self):
-    tags = super(FuchsiaPlatformBackend, self).GetTypExpectationsTags()
+    tags = super().GetTypExpectationsTags()
     tags.append(self.GetDeviceTypeName())
     return tags

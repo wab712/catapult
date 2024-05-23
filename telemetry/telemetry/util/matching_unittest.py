@@ -8,21 +8,21 @@ import unittest
 from telemetry.util import matching
 
 
-class BenchmarkFoo(object):
+class BenchmarkFoo():
   """ Benchmark Foo for testing."""
   @classmethod
   def Name(cls):
     return 'FooBenchmark'
 
 
-class BenchmarkBar(object):
+class BenchmarkBar():
   """ Benchmark Bar for testing long description line."""
   @classmethod
   def Name(cls):
     return 'BarBenchmarkkkkk'
 
 
-class UnusualBenchmark(object):
+class UnusualBenchmark():
   @classmethod
   def Name(cls):
     return 'I have a very unusual name'
@@ -32,17 +32,20 @@ class CommandLineUnittest(unittest.TestCase):
   def testGetMostLikelyMatchedObject(self):
     # Test moved from telemetry/benchmark_runner_unittest.py
     all_benchmarks = [BenchmarkFoo, BenchmarkBar, UnusualBenchmark]
-    self.assertEquals(
-        [BenchmarkFoo, BenchmarkBar],
-        matching.GetMostLikelyMatchedObject(
-            all_benchmarks, 'BenchmarkFooz', name_func=lambda x: x.Name()))
+    self.assertEqual([BenchmarkFoo, BenchmarkBar],
+                     matching.GetMostLikelyMatchedObject(
+                         all_benchmarks,
+                         'BenchmarkFooz',
+                         name_func=lambda x: x.Name()))
 
-    self.assertEquals(
-        [BenchmarkBar, BenchmarkFoo],
-        matching.GetMostLikelyMatchedObject(
-            all_benchmarks, 'BarBenchmark', name_func=lambda x: x.Name()))
+    self.assertEqual([BenchmarkBar, BenchmarkFoo],
+                     matching.GetMostLikelyMatchedObject(
+                         all_benchmarks,
+                         'BarBenchmark',
+                         name_func=lambda x: x.Name()))
 
-    self.assertEquals(
-        [UnusualBenchmark],
-        matching.GetMostLikelyMatchedObject(
-            all_benchmarks, 'unusual', name_func=lambda x: x.Name()))
+    self.assertEqual([UnusualBenchmark],
+                     matching.GetMostLikelyMatchedObject(
+                         all_benchmarks,
+                         'unusual',
+                         name_func=lambda x: x.Name()))

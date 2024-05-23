@@ -33,10 +33,16 @@ found in the LICENSE file.
     </style>
 
     <ul>
+      <template is="dom-if" if="[[getCABELink(user, job)]]">
+        <li>
+          <a href="https://colab.corp.google.com/google_src/files/head/depot/google3/chrome/engprod/perf/pinpoint/cabe-pinpoint-tryjob-results.ipynb#templateParams=%7B%22pinpoint_job_id%22%3A%22[[job.job_id]]%22%7D&sandboxMode=true" target="_blank">
+            CABE's analysis, including Cls
+          </a>
+      </template>
       <template is="dom-if" if="[[job.bug_id]]">
         <li>
-          <a href="https://crbug.com/[[getProject(job)]]/[[job.bug_id]]" target="_blank">
-            Issue [[getProject(job)]]:[[job.bug_id]]
+          <a href="[[getJobIssueLink(job)]]" target="_blank">
+            [[getJobIssueText(job)]]
           </a>
       </template>
       <li>
@@ -50,7 +56,12 @@ found in the LICENSE file.
       <dl>
         <template is="dom-repeat" items="[[getArguments(job)]]">
           <dt>[[item.key]]
-          <dd>[[item.value]]
+          <template is="dom-if" if="[[item.url]]" restamp>
+              <dd><a href="[[item.url]]" target="_blank">[[item.value]]</a>
+          </template>
+          <template is="dom-if" if="[[!item.url]]" restamp>
+              <dd>[[item.value]]
+          </template>
         </template>
       </dl>
     </div>
@@ -65,6 +76,49 @@ found in the LICENSE file.
         job: {
           type: Object,
         },
+      },
+
+      isTryJob(job) {
+        if (!job) {
+          return false;
+        }
+        return !job.comparison_mode || job.comparison_mode === 'try';
+      },
+
+      getJobIssueLink(job) {
+        let link = ''
+        if (!job || !job.arguments || !job.arguments.bug_id) {
+          return link;
+        }
+        let bug_id = parseInt(job.arguments.bug_id);
+        if (bug_id > 2000000) {
+          link='https://b.corp.google.com/issues/'+bug_id;
+        }
+        else {
+          let project = this.getProject(job);
+          link='https://crbug.com/'+project+'/'+bug_id;
+        }
+        return link
+      },
+
+      getJobIssueText(job) {
+        let text = ''
+        if (!job || !job.arguments || !job.arguments.bug_id) {
+          return text;
+        }
+        let bug_id = parseInt(job.arguments.bug_id);
+        if (bug_id > 2000000) {
+          text='Issue '+bug_id;
+        }
+        else {
+          let project = this.getProject(job);
+          text='Issue '+project+':'+bug_id;
+        }
+        return text;
+      },
+
+      getCABELink(user, job) {
+        return user.endsWith("@google.com") && this.isTryJob(job);
       },
 
       getProject(job) {
@@ -83,7 +137,25 @@ found in the LICENSE file.
           if (['bug_id', 'name', 'user'].includes(key)) {
             continue;
           }
-          tuples.push({key, value: job.arguments[key]});
+          if (['base_git_hash', 'end_git_hash'].includes(key)) {
+            tuples.push({
+              key: key+'/commit_position',
+              value: job.arguments[key],
+            });
+            continue;
+          }
+          if (job.arguments[key].startsWith('http')) {
+              tuples.push({
+                key,
+                value: job.arguments[key],
+                url: job.arguments[key],
+              });
+          } else {
+            tuples.push({
+                key,
+                value: job.arguments[key],
+              });
+          }
         }
         tuples.sort(function(a, b) {
           if (a.key < b.key) return -1;

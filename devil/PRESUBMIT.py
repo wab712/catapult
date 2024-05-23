@@ -7,11 +7,15 @@ See http://dev.chromium.org/developers/how-tos/depottools/presubmit-scripts for
 details on the presubmit API built into depot_tools.
 """
 
+USE_PYTHON3 = True
+
 
 def _RunPylint(input_api, output_api):
   return input_api.RunTests(
-      input_api.canned_checks.RunPylint(
-          input_api, output_api, pylintrc='pylintrc'))
+      input_api.canned_checks.RunPylint(input_api,
+                                        output_api,
+                                        pylintrc='pylintrc',
+                                        version="2.7"))
 
 
 def _RunUnitTests(input_api, output_api):
@@ -30,14 +34,6 @@ def _RunUnitTests(input_api, output_api):
                   output_api.PresubmitPromptWarning)
 
   return input_api.RunTests([
-      input_api.Command(name='devil/bin/run_py_tests',
-                        cmd=[
-                            input_api.os_path.join(
-                                input_api.PresubmitLocalPath(), 'bin',
-                                'run_py_tests')
-                        ],
-                        kwargs={'env': test_env},
-                        message=message_type),
       input_api.Command(name='devil/bin/run_py3_tests',
                         cmd=[
                             input_api.os_path.join(

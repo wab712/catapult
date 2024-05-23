@@ -10,16 +10,19 @@ import json
 
 from dashboard.common import request_handler
 
+from flask import make_response, request
 
-class NavbarHandler(request_handler.RequestHandler):
+
+def NavbarHandlerPost():
   """XHR endpoint to fill in navbar fields."""
-
-  def post(self):
-    template_values = {}
-    self.GetDynamicVariables(template_values, self.request.get('path'))
-    self.response.out.write(
-        json.dumps({
-            'login_url': template_values['login_url'],
-            'is_admin': template_values['is_admin'],
-            'display_username': template_values['display_username'],
-        }))
+  template_values = {}
+  request_handler.RequestHandlerGetDynamicVariables(template_values,
+                                                   request.values.get('path'))
+  res = make_response(
+      json.dumps({
+          'login_url': template_values['login_url'],
+          'is_admin': template_values['is_admin'],
+          'display_username': template_values['display_username'],
+          'is_internal_user': template_values['is_internal_user']
+      }))
+  return res

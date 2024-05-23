@@ -8,9 +8,6 @@ from tracing.trace_data import trace_data
 
 
 class DisplayTracingAgent(tracing_agent.TracingAgent):
-  def __init__(self, platform_backend, config):
-    super(DisplayTracingAgent, self).__init__(platform_backend, config)
-
   @classmethod
   def IsSupported(cls, platform_backend):
     return platform_backend.IsDisplayTracingSupported()
@@ -20,6 +17,7 @@ class DisplayTracingAgent(tracing_agent.TracingAgent):
     if config.enable_platform_display_trace:
       self._platform_backend.StartDisplayTracing()
       return True
+    return False
 
   def StopAgentTracing(self):
     # TODO: Split collection and stopping.

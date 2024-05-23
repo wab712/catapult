@@ -17,8 +17,8 @@ import os
 import re
 import sys
 import unittest
-import urllib
-import webapp2
+import six
+import six.moves.urllib.parse
 import webtest
 
 from google.appengine.api import oauth
@@ -31,6 +31,7 @@ from dashboard.common import datastore_hooks
 from dashboard.common import stored_object
 from dashboard.common import utils
 from dashboard.models import graph_data
+from dashboard.services import request as request_service
 
 _QUEUE_YAML_DIR = os.path.join(os.path.dirname(__file__), '..', '..')
 
@@ -42,7 +43,12 @@ EXTERNAL_USER = users.User(
     email='external@example.com', _auth_domain='example.com')
 
 
-class FakeRequestObject(object):
+def CheckSandwichAllowlist(subscription, benchmark, cfg):
+  return not ('blocked' in subscription or 'blocked' in benchmark
+              or 'blocked' in cfg)
+
+
+class FakeRequestObject:
   """Fake Request object which can be used by datastore_hooks mocks."""
 
   def __init__(self, remote_addr=None):
@@ -50,7 +56,7 @@ class FakeRequestObject(object):
     self.remote_addr = remote_addr
 
 
-class FakeResponseObject(object):
+class FakeResponseObject:
   """Fake Response Object which can be returned by urlfetch mocks."""
 
   def __init__(self, status_code, content):
@@ -88,11 +94,11 @@ class TestCase(unittest.TestCase):
     self.logger.addHandler(self.stream_handler)
     self.addCleanup(self.logger.removeHandler, self.stream_handler)
 
-  def SetUpApp(self, handlers):
-    self.testapp = webtest.TestApp(webapp2.WSGIApplication(handlers))
+  def SetUpFlaskApp(self, flask_app):
+    self.testapp = webtest.TestApp(flask_app)
 
   def PatchEnviron(self, path):
-    environ_patch = {'REQUEST_URI': path}
+    environ_patch = {'PATH_INFO': path}
     try:
       if oauth.get_current_user(utils.OAUTH_SCOPES):
         # SetCurrentUserOAuth mocks oauth.get_current_user() directly. That
@@ -107,7 +113,14 @@ class TestCase(unittest.TestCase):
         environ_patch['HTTP_AUTHORIZATION'] = ''
     except oauth.Error:
       pass
+    if self.testapp:
+      # In Python 3, the 'HTTP_AUTHORIZATION' is found removed in the handler.
+      self.testapp.extra_environ.update(environ_patch)
     return mock.patch.dict(os.environ, environ_patch)
+
+  def Get(self, path, *args, **kwargs):
+    with self.PatchEnviron(path):
+      return self.testapp.get(path, *args, **kwargs)
 
   def Post(self, path, *args, **kwargs):
     with self.PatchEnviron(path):
@@ -120,9 +133,12 @@ class TestCase(unittest.TestCase):
     task_queue.FlushQueue(task_queue_name)
     responses = []
     for task in tasks:
-      responses.append(
-          self.Post(handler_name,
-                    urllib.unquote_plus(base64.b64decode(task['body']))))
+      # In python 3.8, unquote_plus() and unquote() accept string only. From
+      # python 3.9, unquote() accept bytes as well. For now, vpython is on
+      # 3.8 and thus we have to use six.ensure_str.
+      data = six.moves.urllib.parse.unquote_plus(
+          six.ensure_str(base64.b64decode(task['body'])))
+      responses.append(self.Post(handler_name, data))
       if recurse:
         responses.extend(
             self.ExecuteTaskQueueTasks(handler_name, task_queue_name))
@@ -164,6 +180,10 @@ class TestCase(unittest.TestCase):
     """Sets the user in the environment to have no email and be non-admin."""
     self.testbed.setup_env(
         user_is_admin='0', user_email='', user_id='', overwrite=True)
+
+  def SetUserGroupMembership(self, user_email, group_name, is_member):
+    """Sets the group membership of the user"""
+    utils.SetCachedIsGroupMember(user_email, group_name, is_member)
 
   def GetEmbeddedVariable(self, response, var_name):
     """Gets a variable embedded in a script element in a response.
@@ -331,7 +351,7 @@ def SetIpAllowlist(ip_addresses):
 
 
 # TODO(fancl): Make it a "real" fake issue tracker.
-class FakeIssueTrackerService(object):
+class FakeIssueTrackerService:
   """A fake version of IssueTrackerService that saves call values."""
 
   def __init__(self):
@@ -373,15 +393,17 @@ class FakeIssueTrackerService(object):
             'Blink>ServiceWorker',
             'Foo>Bar',
         ],
+        'mergedInto': {},
         'published': '2017-06-28T01:26:53',
         'updated': '2018-03-01T16:16:22',
     }
     # TODO(dberris): Migrate users to not rely on the seeded issue.
     self.issues = {
-        ('chromium', self._bug_id_counter): {
-            k: v for k, v in itertools.chain(self._base_issue.items(), [(
-                'id', self._bug_id_counter), ('projectId', 'chromium')])
-        }
+        ('chromium', self._bug_id_counter):
+            dict(
+                itertools.chain(
+                    list(self._base_issue.items()),
+                    [('id', self._bug_id_counter), ('projectId', 'chromium')]))
     }
     self.issue_comments = {('chromium', self._bug_id_counter): []}
 
@@ -403,15 +425,15 @@ class FakeIssueTrackerService(object):
     })
     # TODO(dberris): In the future, actually generate the issue.
     self.issues.update({
-        (kwargs.get('project', 'chromium'), self._bug_id_counter): {
-            k: v
-            for k, v in itertools.chain(self._base_issue.items(), kwargs.items(
-            ), [('id', self._bug_id_counter
-                ), ('projectId', kwargs.get('project', 'chromium'))])
-        }
+        (kwargs.get('project', 'chromium'), self._bug_id_counter):
+            dict(
+                itertools.chain(
+                    list(self._base_issue.items()), list(kwargs.items()),
+                    [('id', self._bug_id_counter),
+                     ('projectId', kwargs.get('project', 'chromium'))]))
     })
     result = {
-        'bug_id': self._bug_id_counter,
+        'issue_id': self._bug_id_counter,
         'project_id': kwargs.get('project', 'chromium')
     }
     self._bug_id_counter += 1
@@ -431,20 +453,38 @@ class FakeIssueTrackerService(object):
           'state': ('closed'
                     if kwargs.get('status') in {'WontFix', 'Fixed'} else 'open')
       })
+
+    # It was not fun to discover that these lines had to be added before components
+    # passed to perf_issue_service_client.PostIssueComment would show up as side
+    # effects at assertion time in unit tests.
+    if 'components' in kwargs:
+      components = kwargs.get('components')
+      self.issues.setdefault(issue_key, {}).update({
+          'components': components
+      })
+    if 'labels' in kwargs and kwargs.get('labels') is not None:
+      labels = kwargs.get('labels')
+      existing_labels = self.issues.get(issue_key).get('labels')
+      issue_labels = set(labels)
+      if existing_labels is not None:
+        issue_labels = issue_labels | set(existing_labels)
+      self.issues.setdefault(issue_key, {}).update({'labels': issue_labels})
+      if isinstance(labels, list):
+        labels.sort()
     self.calls.append({
         'method': 'AddBugComment',
         'args': args,
         'kwargs': kwargs,
     })
 
-  def GetIssue(self, issue_id, project='chromium'):
-    return self.issues.get((project, issue_id))
+  def GetIssue(self, issue_id, project_name='chromium'):
+    return self.issues.get((project_name, issue_id))
 
-  def GetIssueComments(self, issue_id, project='chromium'):
-    return self.issue_comments.get((project, issue_id), [])
+  def GetIssueComments(self, issue_id, project_name='chromium'):
+    return self.issue_comments.get((project_name, issue_id), [])
 
 
-class FakeSheriffConfigClient(object):
+class FakeSheriffConfigClient:
 
   def __init__(self):
     self.patterns = {}
@@ -458,7 +498,7 @@ class FakeSheriffConfigClient(object):
     return [], None
 
 
-class FakeCrrev(object):
+class FakeCrrev:
 
   def __init__(self):
     self._response = None
@@ -475,7 +515,7 @@ class FakeCrrev(object):
     return self._response
 
 
-class FakePinpoint(object):
+class FakePinpoint:
 
   def __init__(self):
     self.new_job_request = None
@@ -493,7 +533,7 @@ class FakePinpoint(object):
     return self._response
 
 
-class FakeGitiles(object):
+class FakeGitiles:
 
   def __init__(self, repo_commit_list=None):
     self._repo_commit_list = repo_commit_list or {}
@@ -503,7 +543,7 @@ class FakeGitiles(object):
     return self._repo_commit_list.get(repo, {}).get(revision, {})
 
 
-class FakeRevisionInfoClient(object):
+class FakeRevisionInfoClient:
 
   def __init__(self, infos, revisions):
     self._infos = infos
@@ -530,7 +570,7 @@ class FakeRevisionInfoClient(object):
     return infos
 
 
-class FakeCASClient(object):
+class FakeCASClient:
 
   _trees = {}
   _files = {}
@@ -554,11 +594,40 @@ class FakeCASClient(object):
 
   def BatchRead(self, cas_instance, digests):
     digests = [self._NormalizeDigest(d) for d in digests]
+
+    def EncodeData(data):
+      return base64.b64encode(data.encode('utf-8')).decode()
+
     return {
         'responses': [{
-            'data': base64.encodestring(
-                self._files[cas_instance][(d['hash'], d['sizeBytes'])]),
-            'digest': d,
+            'data':
+                EncodeData(self._files[cas_instance][(d['hash'],
+                                                      d['sizeBytes'])]),
+            'digest':
+                d,
             'status': {},
         } for d in digests]
     }
+
+
+class FakeCloudWorkflows:
+
+  def __init__(self):
+    self.executions = {}
+    self.create_execution_called_with_anomaly = None
+
+  def CreateExecution(self, anomaly):
+    self.create_execution_called_with_anomaly = anomaly
+    new_id = ('execution-id-%s' % len(self.executions))
+    self.executions[new_id] = {
+        'name': new_id,
+        'state': 'ACTIVE',
+        'result': None,
+        'error': None,
+    }
+    return new_id
+
+  def GetExecution(self, execution_id):
+    if execution_id not in self.executions:
+      raise request_service.NotFoundError('HTTP status code 404: NOT FOUND', '', '')
+    return self.executions[execution_id]

@@ -81,7 +81,7 @@ class SystemAppDeviceTest(device_test_case.DeviceTestCase):
     self._check_preconditions()
     replacement = devil_env.config.FetchPath(
         'empty_system_webview', device=self._device)
-    with system_app.ReplaceSystemApp(self._device, self.PACKAGE, replacement):
+    with system_app.ReplaceSystemApp(self._device, replacement):
       replaced_paths = self._device.GetApplicationPaths(self.PACKAGE)
       self.assertNotEqual(self._original_paths, replaced_paths)
     restored_paths = self._device.GetApplicationPaths(self.PACKAGE)
@@ -92,6 +92,16 @@ class SystemAppDeviceTest(device_test_case.DeviceTestCase):
     system_app.RemoveSystemApps(self._device, [self.PACKAGE])
     removed_paths = self._device.GetApplicationPaths(self.PACKAGE)
     self.assertEqual([], removed_paths)
+
+  def testInstallPrivileged(self):
+    self._check_preconditions()
+    privileged_path = devil_env.config.FetchPath('empty_system_webview',
+                                                 device=self._device)
+    system_app.InstallPrivilegedApps(self._device,
+                                     [(privileged_path, '/system')])
+    installed_paths = self._device.GetApplicationPaths(self.PACKAGE)
+    self.assertEqual(len(installed_paths), 1)
+    self.assertIn('/system/priv-app', installed_paths[0])
 
 
 if __name__ == '__main__':

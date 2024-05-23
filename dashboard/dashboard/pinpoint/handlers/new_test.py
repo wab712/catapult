@@ -15,11 +15,14 @@ from dashboard.common import namespaced_stored_object
 from dashboard.common import stored_object
 from dashboard.common import testing_common
 from dashboard.common import utils
+from dashboard.services import perf_issue_service_client
 from dashboard.pinpoint import test
 from dashboard.pinpoint.handlers import new
 from dashboard.pinpoint.models import job as job_module
 from dashboard.pinpoint.models import quest as quest_module
 from dashboard.pinpoint.models.change import change_test
+
+_JOB_URL_HOST = 'https://localhost:80'
 
 # All arguments must have string values.
 _BASE_REQUEST = {
@@ -31,6 +34,8 @@ _BASE_REQUEST = {
     'start_git_hash': '1',
     'end_git_hash': '3',
     'story': 'speedometer',
+    'comparison_mode': 'performance',
+    'initial_attempt_count': '10'
 }
 
 # TODO: Make this agnostic to the parameters the Quests take.
@@ -47,7 +52,7 @@ _CONFIGURATION_ARGUMENTS = {
 class _NewTest(test.TestCase):
 
   def setUp(self):
-    super(_NewTest, self).setUp()
+    super().setUp()
 
     self.SetCurrentUserOAuth(testing_common.INTERNAL_USER)
     self.SetCurrentClientIdOAuth(api_auth.OAUTH_CLIENT_ID_ALLOWLIST[0])
@@ -63,6 +68,8 @@ class _NewTest(test.TestCase):
         })
 
 
+@mock.patch('dashboard.services.swarming.GetAliveBotsByDimensions',
+            mock.MagicMock(return_value=["a"]))
 class NewAuthTest(_NewTest):
 
   @mock.patch.object(api_auth, 'Authorize',
@@ -84,11 +91,17 @@ class NewAuthTest(_NewTest):
     self.assertEqual(result, {'error': 'User authentication error'})
 
 
-@mock.patch.object(job_module.issue_tracker_service, 'IssueTrackerService',
-                   mock.MagicMock())
+@mock.patch('dashboard.services.perf_issue_service_client.PostIssueComment',
+            mock.MagicMock())
 @mock.patch.object(utils, 'ServiceAccountHttp', mock.MagicMock())
 @mock.patch.object(api_auth, 'Authorize', mock.MagicMock())
 @mock.patch.object(utils, 'IsTryjobUser', mock.MagicMock())
+@mock.patch('dashboard.services.swarming.GetAliveBotsByDimensions',
+            mock.MagicMock(return_value=["a"]))
+@mock.patch('dashboard.common.cloud_metric.PublishPinpointJobStatusMetric',
+            mock.MagicMock())
+@mock.patch('dashboard.common.cloud_metric._PublishTSCloudMetric',
+            mock.MagicMock())
 class NewTest(_NewTest):
 
   def testPost(self):
@@ -96,7 +109,7 @@ class NewTest(_NewTest):
     result = json.loads(response.body)
     self.assertIn('jobId', result)
     self.assertEqual(result['jobUrl'],
-                     'https://testbed.example.com/job/%s' % result['jobId'])
+                     _JOB_URL_HOST + '/job/%s' % result['jobId'])
 
   def testNoConfiguration(self):
     request = dict(_BASE_REQUEST)
@@ -105,8 +118,10 @@ class NewTest(_NewTest):
     response = self.Post('/api/new', request, status=200)
     result = json.loads(response.body)
     self.assertIn('jobId', result)
+    job = job_module.JobFromId(json.loads(response.body)['jobId'])
+    self.assertIsNotNone(job.batch_id)
     self.assertEqual(result['jobUrl'],
-                     'https://testbed.example.com/job/%s' % result['jobId'])
+                     _JOB_URL_HOST + '/job/%s' % result['jobId'])
 
   def testBadConfiguration(self):
     request = dict(_BASE_REQUEST)
@@ -161,6 +176,14 @@ class NewTest(_NewTest):
     self.assertEqual(job.comparison_mode, 'try')
     self.assertEqual(job.state._changes[0].id_string, 'chromium@3')
     self.assertEqual(job.state._changes[1].id_string, 'chromium@3')
+
+  def testDifferentAttemptCount(self):
+    request = dict(_BASE_REQUEST)
+    request['comparison_mode'] = 'try'
+    request['initial_attempt_count'] = '2'
+    response = self.Post('/api/new', request, status=200)
+    job = job_module.JobFromId(json.loads(response.body)['jobId'])
+    self.assertEqual(job.state._initial_attempt_count, 2)
 
   def testComparisonModeTry_ApplyPatch(self):
     request = dict(_BASE_REQUEST)
@@ -290,13 +313,6 @@ class NewTest(_NewTest):
         job.state._changes[1].id_string,
         'chromium@f00d + %s' % ('https://lalala/repo~branch~id/abc123',))
 
-  def testComparisonModeOmitted(self):
-    request = dict(_BASE_REQUEST)
-    self.assertFalse('comparison_mode' in request)
-    response = self.Post('/api/new', request, status=200)
-    job = job_module.JobFromId(json.loads(response.body)['jobId'])
-    self.assertEqual(job.comparison_mode, 'try')
-
   def testComparisonModeUnknown(self):
     request = dict(_BASE_REQUEST)
     request['comparison_mode'] = 'invalid comparison mode'
@@ -354,7 +370,7 @@ class NewTest(_NewTest):
     result = json.loads(response.body)
     self.assertIn('jobId', result)
     self.assertEqual(result['jobUrl'],
-                     'https://testbed.example.com/job/%s' % result['jobId'])
+                     _JOB_URL_HOST + '/job/%s' % result['jobId'])
 
   def testWithPatch(self):
     request = dict(_BASE_REQUEST)
@@ -368,14 +384,14 @@ class NewTest(_NewTest):
   def testMissingTarget(self):
     request = dict(_BASE_REQUEST)
     del request['target']
-    response = self.Post('/api/new', request, status=400)
-    self.assertIn('error', json.loads(response.body))
+    response = self.Post('/api/new', request, status=200)
+    self.assertNotIn('error', json.loads(response.body))
 
   def testEmptyTarget(self):
     request = dict(_BASE_REQUEST)
     request['target'] = ''
-    response = self.Post('/api/new', request, status=400)
-    self.assertIn('error', json.loads(response.body))
+    response = self.Post('/api/new', request, status=200)
+    self.assertNotIn('error', json.loads(response.body))
 
   def testFallbackTarget(self):
     request = dict(_BASE_REQUEST)
@@ -489,9 +505,9 @@ class NewTest(_NewTest):
     self.assertEqual(job.batch_id, 'some-identifier')
 
   def testNewPostsCreationMessage(self):
-    tracker = mock.MagicMock()
-    tracker.AddBugComment.return_value = None
-    job_module.issue_tracker_service.IssueTrackerService.return_value = tracker
+    post_issue = perf_issue_service_client.PostIssueComment
+    post_issue.return_value = None
+
     request = dict(_BASE_REQUEST)
     request.update({
         'chart': 'some_chart',
@@ -499,15 +515,14 @@ class NewTest(_NewTest):
         'story_tags': 'some_tag,some_other_tag'
     })
     response = self.Post('/api/new', request, status=200)
+
     self.assertIsNotNone(
         job_module.JobFromId(json.loads(response.body)['jobId']))
     self.ExecuteDeferredTasks('default')
-    self.assertEqual(
-        1, job_module.issue_tracker_service.IssueTrackerService.call_count)
-    tracker.AddBugComment.assert_called_once_with(
-        12345, mock.ANY, project='chromium', send_email=True)
-    args, _ = tracker.AddBugComment.call_args
-    _, message = args
+
+    post_issue.assert_called_once_with(
+        12345, 'chromium', comment=mock.ANY, send_email=True)
+    message = post_issue.call_args.kwargs['comment']
     self.assertIn('Pinpoint job created and queued.', message)
 
   def testExtraArgsSupported(self):
@@ -525,8 +540,8 @@ class NewTest(_NewTest):
 
     # And that the RunTest instance has the extra arguments.
     for quest in job.state._quests:
-      if isinstance(quest, quest_module.RunTelemetryTest) or isinstance(
-          quest, quest_module.RunGTest):
+      if isinstance(quest,
+                    (quest_module.RunGTest, quest_module.RunTelemetryTest)):
         self.assertIn('--experimental-flag', quest._extra_args)
 
   def testNewUsingExecutionEngine(self):

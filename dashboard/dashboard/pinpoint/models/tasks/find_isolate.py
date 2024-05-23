@@ -22,7 +22,7 @@ from dashboard.services import request
 FAILURE_MAPPING = {'FAILURE': 'failed', 'CANCELLED': 'cancelled'}
 
 
-class ScheduleBuildAction(object):
+class ScheduleBuildAction:
   """Action to schedule a build via BuildBucket.
 
   This action will schedule a build via the BuildBucket API, and ensure that
@@ -77,7 +77,7 @@ class UpdateBuildStatusAction(
           'No build details in attempt to update build status; task = %s',
           self.task)
       task_module.UpdateTask(self.job, self.task.id, new_state='failed')
-      return None
+      return
 
     # Attempt to use the payload in a buildbucket pub/sub update to handle the
     # update without polling. Only poll as a last resort.
@@ -100,7 +100,7 @@ class UpdateBuildStatusAction(
               self.task.id,
               new_state='failed',
               payload=self.task.payload)
-          return None
+          return
 
         build = buildbucket_service.GetJobStatus(build_id).get('build', {})
       except request.RequestError as e:
@@ -117,9 +117,9 @@ class UpdateBuildStatusAction(
             self.task.id,
             new_state='failed',
             payload=self.task.payload)
-        return None
+        return
 
-    logging.debug('buildbucket response: %s', build)
+    logging.debug('buildbucket task response: %s', build)
 
     # Update the buildbucket result.
     self.task.payload.update({
@@ -129,7 +129,7 @@ class UpdateBuildStatusAction(
     # Decide whether the build was successful or not.
     if build.get('status') != 'COMPLETED':
       # Skip this update.
-      return None
+      return
 
     result = build.get('result')
     if not result:
@@ -143,7 +143,7 @@ class UpdateBuildStatusAction(
       })
       task_module.UpdateTask(
           self.job, self.task.id, new_state='failed', payload=self.task.payload)
-      return None
+      return
 
     self.task.payload.update({'build_url': build.get('url')})
 
@@ -163,7 +163,7 @@ class UpdateBuildStatusAction(
           self.task.id,
           new_state=FAILURE_MAPPING[result],
           payload=self.task.payload)
-      return None
+      return
 
     # Parse the result and mark this task completed.
     if 'result_details_json' not in build:
@@ -177,7 +177,7 @@ class UpdateBuildStatusAction(
       })
       task_module.UpdateTask(
           self.job, self.task.id, new_state='failed', payload=self.task.payload)
-      return None
+      return
 
     try:
       result_details = json.loads(build['result_details_json'])
@@ -190,7 +190,7 @@ class UpdateBuildStatusAction(
       })
       task_module.UpdateTask(
           self.job, self.task.id, new_state='failed', payload=self.task.payload)
-      return None
+      return
 
     if 'properties' not in result_details:
       self.task.payload.update({
@@ -204,7 +204,7 @@ class UpdateBuildStatusAction(
       })
       task_module.UpdateTask(
           self.job, self.task.id, new_state='failed', payload=self.task.payload)
-      return None
+      return
 
     properties = result_details['properties']
 
@@ -212,6 +212,8 @@ class UpdateBuildStatusAction(
     required_keys = {'isolate_server', 'got_revision_cp'}
     missing_keys = required_keys - set(properties)
     if missing_keys:
+      logging.warning('Missing expected keys: %s. Property keys: %s',
+                      missing_keys, set(properties))
       self.task.payload.update({
           'errors': [{
               'reason':
@@ -223,7 +225,7 @@ class UpdateBuildStatusAction(
       })
       task_module.UpdateTask(
           self.job, self.task.id, new_state='failed', payload=self.task.payload)
-      return None
+      return
 
     commit_position = properties['got_revision_cp'].replace('@', '(at)')
     suffix = ('without_patch'
@@ -243,7 +245,7 @@ class UpdateBuildStatusAction(
       })
       task_module.UpdateTask(
           self.job, self.task.id, new_state='failed', payload=self.task.payload)
-      return None
+      return
 
     self.task.payload.update({
         'isolate_server': properties['isolate_server'],
@@ -260,7 +262,7 @@ class UpdateBuildStatusAction(
                                                           self.task.id)
 
 
-class InitiateEvaluator(object):
+class InitiateEvaluator:
 
   def __init__(self, job):
     self.job = job
@@ -309,7 +311,7 @@ class InitiateEvaluator(object):
     return None
 
 
-class UpdateEvaluator(object):
+class UpdateEvaluator:
 
   def __init__(self, job):
     self.job = job
@@ -332,7 +334,7 @@ class UpdateEvaluator(object):
 class Evaluator(evaluators.SequenceEvaluator):
 
   def __init__(self, job):
-    super(Evaluator, self).__init__(
+    super().__init__(
         evaluators=(
             evaluators.TaskPayloadLiftingEvaluator(),
             evaluators.FilteringEvaluator(
@@ -392,7 +394,7 @@ def BuildSerializer(task, _, accumulator):
 class Serializer(evaluators.FilteringEvaluator):
 
   def __init__(self):
-    super(Serializer, self).__init__(
+    super().__init__(
         predicate=evaluators.TaskTypeEq('find_isolate'),
         delegate=BuildSerializer)
 

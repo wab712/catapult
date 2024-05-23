@@ -4,6 +4,7 @@
 
 from __future__ import absolute_import
 import logging
+import os
 import posixpath
 import shutil
 import time
@@ -45,7 +46,7 @@ class CrOSBrowserBackend(chrome_browser_backend.ChromeBrowserBackend):
           be determined.
     """
     assert browser_options.IsCrosBrowserOptions()
-    super(CrOSBrowserBackend, self).__init__(
+    super().__init__(
         cros_platform_backend,
         browser_options=browser_options,
         browser_directory=browser_directory,
@@ -179,10 +180,10 @@ class CrOSBrowserBackend(chrome_browser_backend.ChromeBrowserBackend):
 
   @exc_util.BestEffort
   def Close(self):
-    super(CrOSBrowserBackend, self).Close()
+    super().Close()
 
     if self._cri:
-      self._cri.RestartUI(False) # Logs out.
+      self._cri.RestartUI() # Logs out.
       py_utils.WaitFor(lambda: not self._IsCryptohomeMounted(), 180)
       self._cri.CloseConnection()
 
@@ -228,7 +229,7 @@ class CrOSBrowserBackend(chrome_browser_backend.ChromeBrowserBackend):
     """
     self._CollectBrowserLogs(log_level)
     self._CollectUiLogs(log_level)
-    return super(CrOSBrowserBackend, self).CollectDebugData(log_level)
+    return super().CollectDebugData(log_level)
 
   def _CollectBrowserLogs(self, log_level):
     """Helper function to handle the browser log part of CollectDebugData.
@@ -391,5 +392,13 @@ class CrOSBrowserBackend(chrome_browser_backend.ChromeBrowserBackend):
       string containing the stack trace.
     """
     dump_symbolizer = cros_minidump_symbolizer.CrOSMinidumpSymbolizer(
-        self._dump_finder, self.build_dir)
+        self._dump_finder, self.build_dir,
+        symbols_dir=self._CreateExecutableUniqueDirectory('chrome_symbols_'))
     return dump_symbolizer.SymbolizeMinidump(minidump)
+
+  def _GetBrowserExecutablePath(self):
+    if self.build_dir:
+      possible_path = os.path.join(self.build_dir, 'chrome')
+      if os.path.isfile(possible_path):
+        return possible_path
+    return None

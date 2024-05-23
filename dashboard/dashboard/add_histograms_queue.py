@@ -6,11 +6,12 @@ from __future__ import print_function
 from __future__ import division
 from __future__ import absolute_import
 
-import itertools
 import json
 import logging
+import six
 import sys
 import uuid
+from six.moves import zip_longest
 
 from google.appengine.ext import ndb
 
@@ -21,7 +22,6 @@ from dashboard import graph_revisions
 from dashboard import sheriff_config_client
 from dashboard.common import datastore_hooks
 from dashboard.common import histogram_helpers
-from dashboard.common import request_handler
 from dashboard.common import utils
 from dashboard.models import anomaly
 from dashboard.models import graph_data
@@ -32,6 +32,9 @@ from tracing.value import histogram_set
 from tracing.value.diagnostics import diagnostic
 from tracing.value.diagnostics import diagnostic_ref
 from tracing.value.diagnostics import reserved_infos
+
+from flask import request, make_response
+
 
 # Note: annotation names should shorter than add_point._MAX_COLUMN_NAME_LENGTH.
 DIAGNOSTIC_NAMES_TO_ANNOTATION_NAMES = {
@@ -60,8 +63,6 @@ DIAGNOSTIC_NAMES_TO_ANNOTATION_NAMES = {
         'r_webrtc_arcturus_cl',
     reserved_infos.WEBRTC_INTERNAL_RIGEL_REVISIONS.name:
         'r_webrtc_rigel_cl',
-    reserved_infos.WEBRTC_INTERNAL_CAPELLA_REVISIONS.name:
-        'r_webrtc_capella_cl',
     reserved_infos.FUCHSIA_GARNET_REVISIONS.name:
         'r_fuchsia_garnet_git',
     reserved_infos.FUCHSIA_PERIDOT_REVISIONS.name:
@@ -84,73 +85,67 @@ def _CheckRequest(condition, msg):
     raise BadRequestError(msg)
 
 
-class AddHistogramsQueueHandler(request_handler.RequestHandler):
-  """Request handler to process a histogram and add it to the datastore.
+def AddHistogramsQueuePost():
+  """Adds a single histogram or sparse shared diagnostic to the datastore.
+
+  The |data| request parameter can be either a histogram or a sparse shared
+  diagnostic; the set of diagnostics that are considered sparse (meaning that
+  they don't normally change on every upload for a given benchmark from a
+  given bot) is shown in histogram_helpers.SPARSE_DIAGNOSTIC_TYPES.
+
+  See https://goo.gl/lHzea6 for detailed information on the JSON format for
+  histograms and diagnostics.
 
   This request handler is intended to be used only by requests using the
   task queue; it shouldn't be directly from outside.
+
+  Request parameters:
+    data: JSON encoding of a histogram or shared diagnostic.
+    revision: a revision, given as an int.
+    test_path: the test path to which this diagnostic or histogram should be
+        attached.
   """
+  datastore_hooks.SetPrivilegedRequest()
 
-  def get(self):
-    self.post()
+  params = json.loads(request.get_data())
 
-  def post(self):
-    """Adds a single histogram or sparse shared diagnostic to the datastore.
+  _PrewarmGets(params)
 
-    The |data| request parameter can be either a histogram or a sparse shared
-    diagnostic; the set of diagnostics that are considered sparse (meaning that
-    they don't normally change on every upload for a given benchmark from a
-    given bot) is shown in histogram_helpers.SPARSE_DIAGNOSTIC_TYPES.
+  # Roughly, the processing of histograms and the processing of rows can be
+  # done in parallel since there are no dependencies.
 
-    See https://goo.gl/lHzea6 for detailed information on the JSON format for
-    histograms and diagnostics.
+  histogram_futures = []
+  token_state_futures = []
 
-    Request parameters:
-      data: JSON encoding of a histogram or shared diagnostic.
-      revision: a revision, given as an int.
-      test_path: the test path to which this diagnostic or histogram should be
-          attached.
-    """
-    datastore_hooks.SetPrivilegedRequest()
+  try:
+    for p in params:
+      histogram_futures.append((p, _ProcessRowAndHistogram(p)))
 
-    params = json.loads(self.request.body)
-
-    _PrewarmGets(params)
-
-    # Roughly, the processing of histograms and the processing of rows can be
-    # done in parallel since there are no dependencies.
-
-    histogram_futures = []
-    token_state_futures = []
-
-    try:
-      for p in params:
-        histogram_futures.append((p, _ProcessRowAndHistogram(p)))
-    except Exception as e:  # pylint: disable=broad-except
-      for param, futures_info in itertools.izip_longest(params,
-                                                        histogram_futures):
-        if futures_info is not None:
-          continue
-        token_state_futures.append(
-            upload_completion_token.Measurement.UpdateStateByPathAsync(
-                param.get('test_path'), param.get('token'),
-                upload_completion_token.State.FAILED, e.message))
-      ndb.Future.wait_all(token_state_futures)
-      raise
-
-    for info, futures in histogram_futures:
-      operation_state = upload_completion_token.State.COMPLETED
-      error_message = None
-      for f in futures:
-        exception = f.get_exception()
-        if exception is not None:
-          operation_state = upload_completion_token.State.FAILED
-          error_message = exception.message
+  except Exception as e:  # pylint: disable=broad-except
+    for param, futures_info in zip_longest(params, histogram_futures):
+      if futures_info is not None:
+        continue
       token_state_futures.append(
           upload_completion_token.Measurement.UpdateStateByPathAsync(
-              info.get('test_path'), info.get('token'), operation_state,
-              error_message))
+              param.get('test_path'), param.get('token'),
+              upload_completion_token.State.FAILED, str(e)))
     ndb.Future.wait_all(token_state_futures)
+    raise
+
+  for info, futures in histogram_futures:
+    operation_state = upload_completion_token.State.COMPLETED
+    error_message = None
+    for f in futures:
+      exception = f.get_exception()
+      if exception is not None:
+        operation_state = upload_completion_token.State.FAILED
+        error_message = str(exception)
+    token_state_futures.append(
+        upload_completion_token.Measurement.UpdateStateByPathAsync(
+            info.get('test_path'), info.get('token'), operation_state,
+            error_message))
+  ndb.Future.wait_all(token_state_futures)
+  return make_response('')
 
 
 def _GetStoryFromDiagnosticsDict(diagnostics):
@@ -179,8 +174,8 @@ def _PrewarmGets(params):
 
     test_parts = path_parts[2:]
     test_key = '%s/%s' % (path_parts[0], path_parts[1])
-    for p in test_parts:
-      test_key += '/%s' % p
+    for test_part in test_parts:
+      test_key += '/%s' % test_part
       keys.add(ndb.Key('TestMetadata', test_key))
 
   ndb.get_multi_async(list(keys))
@@ -192,7 +187,9 @@ def _ProcessRowAndHistogram(params):
   benchmark_description = params['benchmark_description']
   data_dict = params['data']
 
-  logging.info('Processing: %s', test_path)
+  # Disable this log since it's killing the quota of Cloud Logging API -
+  # write requests per minute
+  # logging.info('Processing: %s', test_path)
 
   hist = histogram_module.Histogram.FromDict(data_dict)
 
@@ -259,13 +256,18 @@ def _AddRowsFromData(params, revision, parent_test, legacy_parent_tests):
   test_key = parent_test.key
 
   stat_names_to_test_keys = {k: v.key for k, v in legacy_parent_tests.items()}
-  rows = CreateRowEntities(data_dict, test_key, stat_names_to_test_keys,
-                           revision)
-  if not rows:
+  row, stat_name_row_dict = _CreateRowEntitiesInternal(data_dict, test_key,
+                                                       stat_names_to_test_keys,
+                                                       revision)
+  if not row:
     raise ndb.Return()
 
+  rows = [row]
+  if stat_name_row_dict:
+    rows.extend(stat_name_row_dict.values())
   yield ndb.put_multi_async(rows) + [r.UpdateParentAsync() for r in rows]
-  logging.debug('Processed %s row entities.', len(rows))
+
+  logging.info('Added %s rows to Datastore', str(len(rows)))
 
   def IsMonitored(client, test):
     reason = []
@@ -275,7 +277,9 @@ def _AddRowsFromData(params, revision, parent_test, legacy_parent_tests):
     if not test.has_rows:
       reason.append('has_rows')
     if reason:
-      logging.info('Skip test: %s reason=%s', test.key, ','.join(reason))
+      # Disable this log since it's killing the quota of Cloud Logging API -
+      # write requests per minute
+      # logging.info('Skip test: %s reason=%s', test.key, ','.join(reason))
       return False
     logging.info('Process test: %s', test.key)
     return True
@@ -370,33 +374,49 @@ def GetUnitArgs(unit):
     unit_args['improvement_direction'] = anomaly.UNKNOWN
   return unit_args
 
-
 def CreateRowEntities(histogram_dict, test_metadata_key,
                       stat_names_to_test_keys, revision):
+  row, stat_name_row_dict = _CreateRowEntitiesInternal(histogram_dict,
+                                                       test_metadata_key,
+                                                       stat_names_to_test_keys,
+                                                       revision)
+
+  if not row:
+    return None
+
+  rows = [row]
+  if stat_name_row_dict:
+    rows.extend(stat_name_row_dict.values())
+
+  return rows
+
+
+def _CreateRowEntitiesInternal(histogram_dict, test_metadata_key,
+                               stat_names_to_test_keys, revision):
   h = histogram_module.Histogram.FromDict(histogram_dict)
   # TODO(#3564): Move this check into _PopulateNumericalFields once we
   # know that it's okay to put rows that don't have a value/error.
   if h.num_values == 0:
-    return None
-
-  rows = []
+    return None, None
 
   row_dict = _MakeRowDict(revision, test_metadata_key.id(), h)
-  rows.append(
-      graph_data.Row(
-          id=revision,
-          parent=utils.GetTestContainerKey(test_metadata_key),
-          **add_point.GetAndValidateRowProperties(row_dict)))
+  parent_test_key = utils.GetTestContainerKey(test_metadata_key)
+  row = graph_data.Row(
+      id=revision,
+      parent=parent_test_key,
+      **add_point.GetAndValidateRowProperties(row_dict))
 
+  stat_name_row_dict = {}
   for stat_name, suffixed_key in stat_names_to_test_keys.items():
+    suffixed_parent_test_key = utils.GetTestContainerKey(suffixed_key)
     row_dict = _MakeRowDict(revision, suffixed_key.id(), h, stat_name=stat_name)
-    rows.append(
-        graph_data.Row(
-            id=revision,
-            parent=utils.GetTestContainerKey(suffixed_key),
-            **add_point.GetAndValidateRowProperties(row_dict)))
+    new_row = graph_data.Row(
+        id=revision,
+        parent=suffixed_parent_test_key,
+        **add_point.GetAndValidateRowProperties(row_dict))
+    stat_name_row_dict[stat_name] = new_row
 
-  return rows
+  return row, stat_name_row_dict
 
 
 def _MakeRowDict(revision, test_path, tracing_histogram, stat_name=None):
@@ -416,6 +436,25 @@ def _MakeRowDict(revision, test_path, tracing_histogram, stat_name=None):
   is_summary = reserved_infos.SUMMARY_KEYS.name in tracing_histogram.diagnostics
   if trace_url_set and not is_summary:
     d['supplemental_columns']['a_tracing_uri'] = list(trace_url_set)[-1]
+
+  try:
+    bot_id_name = tracing_histogram.diagnostics.get(
+        reserved_infos.BOT_ID.name)
+    if bot_id_name:
+      bot_id_names = list(bot_id_name)
+      d['supplemental_columns']['a_bot_id'] = bot_id_names
+      if len(bot_id_names) == 1:
+        d['swarming_bot_id'] = bot_id_names[0]
+
+  except Exception as e: # pylint: disable=broad-except
+    logging.warning('bot_id failed. Error: %s', e)
+  try:
+    os_detail_vers = tracing_histogram.diagnostics.get(
+        reserved_infos.OS_DETAILED_VERSIONS.name)
+    if os_detail_vers:
+      d['supplemental_columns']['a_os_detail_vers'] = list(os_detail_vers)
+  except Exception as e: # pylint: disable=broad-except
+    logging.warning('os_detail_vers failed. Error: %s', e)
 
   for diag_name, annotation in DIAGNOSTIC_NAMES_TO_ANNOTATION_NAMES.items():
     revision_info = tracing_histogram.diagnostics.get(diag_name)
@@ -465,7 +504,7 @@ def _AddStdioUri(name, link_list, row_dict):
   if isinstance(link_list, list):
     row_dict['supplemental_columns'][name] = '[%s](%s)' % tuple(link_list)
   # Support busted format until infra changes roll
-  elif isinstance(link_list, basestring):
+  elif isinstance(link_list, six.string_types):
     row_dict['supplemental_columns'][name] = link_list
 
 

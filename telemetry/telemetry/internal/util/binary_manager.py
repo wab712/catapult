@@ -32,7 +32,7 @@ CHROME_BINARY_CONFIG = os.path.join(util.GetCatapultDir(), 'common', 'py_utils',
 
 SUPPORTED_DEP_PLATFORMS = (
     'linux_aarch64', 'linux_x86_64', 'linux_armv7l', 'linux_mips',
-    'mac_x86_64',
+    'mac_x86_64', 'mac_arm64',
     'win_x86', 'win_AMD64',
     'android_arm64-v8a', 'android_armeabi-v7a', 'android_arm', 'android_x64',
     'android_x86'
@@ -44,6 +44,7 @@ PLATFORMS_TO_DOWNLOAD_FOLDER_MAP = {
     'linux_armv7l': 'bin/linux/armv7l',
     'linux_mips': 'bin/linux/mips',
     'mac_x86_64': 'bin/mac/x86_64',
+    'mac_arm64': 'bin/mac/arm64',
     'win_x86': 'bin/win/x86',
     'win_AMD64': 'bin/win/AMD64',
     'android_arm64-v8a': 'bin/android/arm64-v8a',
@@ -133,9 +134,9 @@ def LocalPath(binary_name, os_name, arch, os_version=None):
   return GetBinaryManager().LocalPath(binary_name, os_name, arch, os_version)
 
 
-def FetchBinaryDependencies(
-    platform, client_configs, fetch_reference_chrome_binary):
-  """ Fetch all binary dependenencies for the given |platform|.
+def FetchBinaryDependencies(platform, client_configs,
+    fetch_reference_chrome_binary, dependency_filter=None):
+  """ Fetch all binary dependencies for the given |platform|.
 
   Note: we don't fetch browser binaries by default because the size of the
   binary is about 2Gb, and it requires cloud storage permission to
@@ -146,6 +147,8 @@ def FetchBinaryDependencies(
     client_configs: A list of paths (string) to dependencies json files.
     fetch_reference_chrome_binary: whether to fetch reference chrome binary for
       the given platform.
+    dependency_filter: A list of dependency names to limit fetch to - if not
+      provided will fetch all dependencies for the given platform.
   """
   configs = [
       dependency_manager.BaseConfig(TELEMETRY_PROJECT_CONFIG),
@@ -159,14 +162,14 @@ def FetchBinaryDependencies(
   if _IsChromeOSLocalMode(os_name):
     os_name = 'linux'
   target_platform = '%s_%s' % (os_name, platform.GetArchName())
-  dep_manager.PrefetchPaths(target_platform)
+  dep_manager.PrefetchPaths(target_platform, dependency_filter)
 
   host_platform = None
   fetch_devil_deps = False
   if os_name in ('android', 'chromeos'):
     host_platform = '%s_%s' % (
         py_utils.GetHostOsName(), py_utils.GetHostArchName())
-    dep_manager.PrefetchPaths(host_platform)
+    dep_manager.PrefetchPaths(host_platform, dependency_filter)
     if os_name == 'android':
       if host_platform == 'linux_x86_64':
         fetch_devil_deps = True
@@ -219,7 +222,7 @@ def ReinstallAndroidHelperIfNeeded(binary_name, install_path, device):
   host_path = FetchPath(binary_name, 'android', device.GetABI())
   if not host_path:
     raise Exception(
-        '%s binary could not be fetched as %s', binary_name, host_path)
+        '%s binary could not be fetched as %s' % (binary_name, host_path))
   device.PushChangedFiles([(host_path, install_path)])
   device.RunShellCommand(['chmod', '777', install_path], check_return=True)
   _installed_helpers.add((device.serial, install_path))
@@ -260,11 +263,11 @@ def UpdateDependency(dependency, dep_local_path, version,
   try:
     old_version = c.GetVersion(dependency, dep_platform)
     print('Updating from version: {}'.format(old_version))
-  except ValueError:
+  except ValueError as e:
     raise RuntimeError(
         ('binary_dependencies.json entry for %s missing or invalid; please add '
          'it first! (need download_path and path_within_archive)') %
-        dep_platform)
+        dep_platform) from e
 
   if dep_local_path:
     c.AddCloudStorageDependencyUpdateJob(

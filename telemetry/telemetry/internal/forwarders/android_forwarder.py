@@ -23,15 +23,14 @@ except ImportError as exc:
 class AndroidForwarderFactory(forwarders.ForwarderFactory):
 
   def __init__(self, device):
-    super(AndroidForwarderFactory, self).__init__()
+    super().__init__()
     self._device = device
 
   def Create(self, local_port, remote_port, reverse=False):
     try:
       if not reverse:
         return AndroidForwarder(self._device, local_port, remote_port)
-      else:
-        return AndroidReverseForwarder(self._device, local_port, remote_port)
+      return AndroidReverseForwarder(self._device, local_port, remote_port)
     except Exception:
       logging.exception(
           'Failed to map local_port=%r to remote_port=%r (reverse=%r).',
@@ -87,7 +86,7 @@ class AndroidForwarder(forwarders.Forwarder):
   """
 
   def __init__(self, device, local_port, remote_port):
-    super(AndroidForwarder, self).__init__()
+    super().__init__()
     self._device = device
     assert local_port, 'Local port must be given'
     forwarder.Forwarder.Map([(remote_port or 0, local_port)], self._device)
@@ -98,7 +97,7 @@ class AndroidForwarder(forwarders.Forwarder):
   def Close(self):
     if self.is_forwarding:
       forwarder.Forwarder.UnmapDevicePort(self.remote_port, self._device)
-    super(AndroidForwarder, self).Close()
+    super().Close()
 
 
 class AndroidReverseForwarder(forwarders.Forwarder):
@@ -112,12 +111,11 @@ class AndroidReverseForwarder(forwarders.Forwarder):
   """
 
   def __init__(self, device, local_port, remote_port):
-    super(AndroidReverseForwarder, self).__init__()
+    super().__init__()
     self._device = device
     assert remote_port, 'Remote port must be given'
-    if not local_port:
-      local_port = util.GetUnreservedAvailableLocalPort()
-    self._device.adb.Forward('tcp:%d' % local_port, remote_port)
+    local_port = int(self._device.adb.Forward('tcp:%d' % (local_port or 0),
+                                              remote_port))
     self._StartedForwarding(local_port, remote_port)
 
   def Close(self):
@@ -132,4 +130,4 @@ class AndroidReverseForwarder(forwarders.Forwarder):
       except device_errors.AdbCommandFailedError:
         logging.critical(
             'Attempted to unforward %s but failed.', local_address)
-    super(AndroidReverseForwarder, self).Close()
+    super().Close()

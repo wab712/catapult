@@ -13,8 +13,14 @@
 # The properties below must be listed in this order. The "direction" only needs
 # to be specified for properties used for sort order.
 #
-# To update the indexes in production after editing them here, you must run
-# appcfg.py vacuum_indexes or appcfg.py update_indexes.
+# To update the indexes in production after editing them here, you need to run
+# the following commands:
+# Deploy the index configuration file:
+#   gcloud app deploy index.yaml
+# Delete unused indexes:
+#   gcloud datastore indexes cleanup index.yaml
+# More details:
+# https://cloud.google.com/appengine/docs/standard/python/config/indexref#deploying_the_index_configuration_file
 
 indexes:
 
@@ -140,6 +146,13 @@ indexes:
   - name: created
     direction: desc
 
+# Used for pagination.
+- kind: Job
+  properties:
+  - name: user
+  - name: created
+    direction: asc
+
 # Used to query for jobs with filters on configuration and user.
 - kind: Job
   properties:
@@ -193,6 +206,22 @@ indexes:
 
 # Used in find_anomalies.GetRowsToAnalyze when getting latest points,
 # with projection query for properties revision, value, and timestamp.
+# This is a new version of the index introduced for filtering out
+# anomalies that span swarming_bot_id changes.
+- kind: Row
+  properties:
+  - name: parent_test
+  - name: revision
+    direction: desc
+  - name: swarming_bot_id
+  - name: timestamp
+  - name: value
+
+# Used in find_anomalies.GetRowsToAnalyze when getting latest points,
+# with projection query for properties revision, value, and timestamp.
+# This is the old version of the same index from line 217, and preserving
+# it here should allow us to deploy and rollback more safely so we don't
+# repeat the production errors we saw in b/303566284
 - kind: Row
   properties:
   - name: parent_test

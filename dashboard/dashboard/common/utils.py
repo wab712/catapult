@@ -7,14 +7,18 @@ from __future__ import division
 from __future__ import absolute_import
 
 import collections
+import functools
 import logging
 import os
+import random
 import re
+import six
+import six.moves.urllib.parse
 import time
-import urllib
 
 from apiclient import discovery
 from apiclient import errors
+
 from google.appengine.api import app_identity
 from google.appengine.api import memcache
 from google.appengine.api import oauth
@@ -22,9 +26,8 @@ from google.appengine.api import urlfetch
 from google.appengine.api import urlfetch_errors
 from google.appengine.api import users
 from google.appengine.ext import ndb
-import httplib2
-from oauth2client import client
 
+from dashboard.common import oauth2_utils
 from dashboard.common import stored_object
 
 SHERIFF_DOMAINS_KEY = 'sheriff_domains_key'
@@ -37,6 +40,12 @@ _PROJECT_ID_KEY = 'project_id'
 _DEFAULT_CUSTOM_METRIC_VAL = 1
 OAUTH_SCOPES = ('https://www.googleapis.com/auth/userinfo.email',)
 OAUTH_ENDPOINTS = ['/api/', '/add_histograms', '/add_point', '/uploads']
+LEGACY_SERVICE_ACCOUNT = ('425761728072-pa1bs18esuhp2cp2qfa1u9vb6p1v6kfu'
+                          '@developer.gserviceaccount.com')
+ADC_SERVICE_ACCOUNT = 'chromeperf@appspot.gserviceaccount.com'
+_CACHE_TIME = 60*60*2 # 2 hours
+DELAY_REPORTING_PLACEHOLDER = 'Speed>Regressions'
+DELAY_REPORTING_LABEL = 'Chromeperf-Delay-Reporting'
 
 _AUTOROLL_DOMAINS = (
     'chops-service-accounts.iam.gserviceaccount.com',
@@ -64,15 +73,22 @@ class _SimpleCache(
 
 _PINPOINT_REPO_EXCLUSION_TTL = 60  # seconds
 _PINPOINT_REPO_EXCLUSION_CACHED = _SimpleCache(0, None)
+_STAGING_APP_ID = 'chromeperf-stage'
 
 
 def IsDevAppserver():
-  return app_identity.get_application_id() == 'None'
+  try:
+    return app_identity.get_application_id() == 'None'
+  except AttributeError:
+    return False
 
 
-def _GetNowRfc3339():
-  """Returns the current time formatted per RFC 3339."""
-  return time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
+def IsStagingEnvironment():
+  """ Check if running in staging environment """
+  try:
+    return app_identity.get_application_id() == _STAGING_APP_ID
+  except AttributeError:
+    return False
 
 
 def GetEmail():
@@ -87,7 +103,7 @@ def GetEmail():
     OAuthRequestError: The request was not a valid OAuth request.
     OAuthServiceFailureError: An unknown error occurred.
   """
-  request_uri = os.environ.get('REQUEST_URI', '')
+  request_uri = os.environ.get('PATH_INFO', '')
   if any(request_uri.startswith(e) for e in OAUTH_ENDPOINTS):
     # Prevent a CSRF whereby a malicious site posts an api request without an
     # Authorization header (so oauth.get_current_user() is None), but while the
@@ -95,48 +111,16 @@ def GetEmail():
     # return a non-None user.
     if 'HTTP_AUTHORIZATION' not in os.environ:
       # The user is not signed in. Avoid raising OAuthRequestError.
+      logging.info('Cannot get user email as the user is not signed in')
       return None
     user = oauth.get_current_user(OAUTH_SCOPES)
   else:
-    user = users.get_current_user()
+    user = GetGaeCurrentUser()
   return user.email() if user else None
 
 
-@ndb.transactional(propagation=ndb.TransactionOptions.INDEPENDENT, xg=True)
-def TickMonitoringCustomMetric(metric_name):
-  """Increments the stackdriver custom metric with the given name.
-
-  This is used for cron job monitoring; if these metrics stop being received
-  an alert mail is sent. For more information on custom metrics, see
-  https://cloud.google.com/monitoring/custom-metrics/using-custom-metrics
-
-  Args:
-    metric_name: The name of the metric being monitored.
-  """
-  credentials = client.GoogleCredentials.get_application_default()
-  monitoring = discovery.build('monitoring', 'v3', credentials=credentials)
-  now = _GetNowRfc3339()
-  project_id = stored_object.Get(_PROJECT_ID_KEY)
-  points = [{
-      'interval': {
-          'startTime': now,
-          'endTime': now,
-      },
-      'value': {
-          'int64Value': _DEFAULT_CUSTOM_METRIC_VAL,
-      },
-  }]
-  write_request = monitoring.projects().timeSeries().create(
-      name='projects/%s' % project_id,
-      body={
-          'timeSeries': [{
-              'metric': {
-                  'type': 'custom.googleapis.com/%s' % metric_name,
-              },
-              'points': points
-          }]
-      })
-  write_request.execute()
+def GetGaeCurrentUser():
+  return users.GetCurrentUser()
 
 
 def TestPath(key):
@@ -196,12 +180,13 @@ def TestMetadataKey(key_or_string):
   """
   if key_or_string is None:
     return None
-  if isinstance(key_or_string, basestring):
+  if isinstance(key_or_string, six.string_types):
     return ndb.Key('TestMetadata', key_or_string)
   if key_or_string.kind() == 'TestMetadata':
     return key_or_string
   if key_or_string.kind() == 'Test':
     return ndb.Key('TestMetadata', TestPath(key_or_string))
+  return None
 
 
 def OldStyleTestKey(key_or_string):
@@ -218,12 +203,12 @@ def OldStyleTestKey(key_or_string):
   """
   if key_or_string is None:
     return None
-  elif isinstance(key_or_string, ndb.Key) and key_or_string.kind() == 'Test':
+  if isinstance(key_or_string, ndb.Key) and key_or_string.kind() == 'Test':
     return key_or_string
   if (isinstance(key_or_string, ndb.Key)
       and key_or_string.kind() == 'TestMetadata'):
     key_or_string = key_or_string.id()
-  assert isinstance(key_or_string, basestring)
+  assert isinstance(key_or_string, six.string_types)
   path_parts = key_or_string.split('/')
   key_parts = ['Master', path_parts[0], 'Bot', path_parts[1]]
   for part in path_parts[2:]:
@@ -297,7 +282,7 @@ def MostSpecificMatchingPattern(test, pattern_data_tuples):
     a_parts = a[0].split('/')
     b_parts = b[0].split('/')
     for a_part, b_part, test_part in reversed(
-        zip(a_parts, b_parts, test_path_parts)):
+        list(zip(a_parts, b_parts, test_path_parts))):
       # We favour a specific match over a partial match, and a partial
       # match over a catch-all * match.
       if a_part == b_part:
@@ -316,7 +301,7 @@ def MostSpecificMatchingPattern(test, pattern_data_tuples):
     # 0 to indicate that we've found an equality.
     return 0
 
-  matching_patterns.sort(cmp=CmpPatterns)  # pylint: disable=using-cmp-argument
+  matching_patterns.sort(key=functools.cmp_to_key(CmpPatterns))
 
   return matching_patterns[0][1]
 
@@ -392,7 +377,7 @@ def _MatchesPatternPart(pattern_part, test_path_part):
   Returns:
     True if it matches, False otherwise.
   """
-  if pattern_part == '*' or pattern_part == test_path_part:
+  if pattern_part in ('*', test_path_part):
     return True
   if '*' not in pattern_part:
     return False
@@ -469,7 +454,7 @@ def MinimumRange(ranges):
   """Returns the intersection of the given ranges, or None."""
   if not ranges:
     return None
-  starts, ends = zip(*ranges)
+  starts, ends = list(zip(*ranges))
   start, end = (max(starts), min(ends))
   if start > end:
     return None
@@ -486,8 +471,11 @@ def IsInternalUser():
   cached = GetCachedIsInternalUser(email)
   if cached is not None:
     return cached
-  is_internal_user = IsGroupMember(identity=email, group='chromeperf-access')
-  SetCachedIsInternalUser(email, is_internal_user)
+  try:
+    is_internal_user = IsGroupMember(identity=email, group='chromeperf-access')
+    SetCachedIsInternalUser(email, is_internal_user)
+  except GroupMemberAuthFailed:
+    return False
   return is_internal_user
 
 
@@ -502,9 +490,12 @@ def IsAdministrator(email=None):
   cached = GetCachedIsAdministrator(email)
   if cached is not None:
     return cached
-  is_administrator = IsGroupMember(
-      identity=email, group='project-chromeperf-admins')
-  SetCachedIsAdministrator(email, is_administrator)
+  try:
+    is_administrator = IsGroupMember(
+        identity=email, group='project-chromeperf-admins')
+    SetCachedIsAdministrator(email, is_administrator)
+  except GroupMemberAuthFailed:
+    return False
   return is_administrator
 
 
@@ -513,7 +504,7 @@ def GetCachedIsInternalUser(email):
 
 
 def SetCachedIsInternalUser(email, value):
-  memcache.set(_IsInternalUserCacheKey(email), value, time=60 * 60 * 24)
+  memcache.set(_IsInternalUserCacheKey(email), value, time=_CACHE_TIME)
 
 
 def GetCachedIsAdministrator(email):
@@ -521,7 +512,7 @@ def GetCachedIsAdministrator(email):
 
 
 def SetCachedIsAdministrator(email, value):
-  memcache.set(_IsAdministratorUserCacheKey(email), value, time=60 * 60 * 24)
+  memcache.set(_IsAdministratorUserCacheKey(email), value, time=_CACHE_TIME)
 
 
 def _IsInternalUserCacheKey(email):
@@ -546,8 +537,15 @@ def ShouldTurnOnUploadCompletionTokenExperiment():
   email = GetEmail()
   if not email:
     return False
-  return IsGroupMember(
-      identity=email, group='project-chromeperf-upload-token-experiment')
+  try:
+    return IsGroupMember(
+        identity=email, group='project-chromeperf-upload-token-experiment')
+  except GroupMemberAuthFailed:
+    return False
+
+
+class GroupMemberAuthFailed(Exception):
+  pass
 
 
 def IsGroupMember(identity, group):
@@ -558,7 +556,10 @@ def IsGroupMember(identity, group):
     group: Group name.
 
   Returns:
-    True if confirmed to be a member, False otherwise.
+    True if user is a member, False otherwise.
+
+  Raises:
+    GroupMemberAuthFailed: Failed to check if user is a member.
   """
   cached = GetCachedIsGroupMember(identity, group)
   if cached is not None:
@@ -577,8 +578,8 @@ def IsGroupMember(identity, group):
     SetCachedIsGroupMember(identity, group, is_member)
     return is_member
   except (errors.HttpError, KeyError, AttributeError) as e:
-    logging.error('Failed to check membership of %s: %s', identity, e)
-    return False
+    logging.error('Failed to check membership of %s: %s', identity, str(e))
+    raise GroupMemberAuthFailed('Failed to authenticate user.') from e
 
 
 def GetCachedIsGroupMember(identity, group):
@@ -587,41 +588,28 @@ def GetCachedIsGroupMember(identity, group):
 
 def SetCachedIsGroupMember(identity, group, value):
   memcache.set(
-      _IsGroupMemberCacheKey(identity, group), value, time=60 * 60 * 24)
+      _IsGroupMemberCacheKey(identity, group), value, time=_CACHE_TIME)
 
 
 def _IsGroupMemberCacheKey(identity, group):
   return 'is_group_member_%s_%s' % (identity, group)
 
 
-@ndb.transactional(propagation=ndb.TransactionOptions.INDEPENDENT, xg=True)
-def ServiceAccountEmail(scope=EMAIL_SCOPE):
-  account_details = stored_object.Get(SERVICE_ACCOUNT_KEY)
-  if not account_details:
-    raise KeyError('Service account credentials not found.')
-
-  assert scope, "ServiceAccountHttp scope must not be None."
-
-  return account_details['client_email'],
+def ServiceAccountEmail():
+  return ADC_SERVICE_ACCOUNT
 
 
 @ndb.transactional(propagation=ndb.TransactionOptions.INDEPENDENT, xg=True)
 def ServiceAccountHttp(scope=EMAIL_SCOPE, timeout=None):
   """Returns the Credentials of the service account if available."""
-  account_details = stored_object.Get(SERVICE_ACCOUNT_KEY)
-  if not account_details:
-    raise KeyError('Service account credentials not found.')
-
   assert scope, "ServiceAccountHttp scope must not be None."
 
-  client.logger.setLevel(logging.WARNING)
-  credentials = client.SignedJwtAssertionCredentials(
-      service_account_name=account_details['client_email'],
-      private_key=account_details['private_key'],
-      scope=scope)
+  import google_auth_httplib2  # pylint: disable=import-outside-toplevel
 
-  http = httplib2.Http(timeout=timeout)
-  credentials.authorize(http)
+  credentials = oauth2_utils.GetAppDefaultCredentials(scope)
+  http = google_auth_httplib2.AuthorizedHttp(credentials)
+  if timeout:
+    http.timeout = timeout
   return http
 
 
@@ -640,14 +628,21 @@ def IsValidSheriffUser():
 
 def IsTryjobUser():
   email = GetEmail()
-  return bool(email) and IsGroupMember(
-      identity=email, group='project-pinpoint-tryjob-access')
+  try:
+    return bool(email) and IsGroupMember(
+        identity=email, group='project-pinpoint-tryjob-access')
+  except GroupMemberAuthFailed:
+    logging.info('User is not a member of project-pinpoint-tryjob-access.')
+    return False
 
 
 def IsAllowedToDelegate(email):
-  return bool(email) and IsGroupMember(
-      identity=email,
-      group='project-pinpoint-service-account-delegation-access')
+  try:
+    return bool(email) and IsGroupMember(
+        identity=email,
+        group='project-pinpoint-service-account-delegation-access')
+  except GroupMemberAuthFailed:
+    return False
 
 
 @ndb.transactional(propagation=ndb.TransactionOptions.INDEPENDENT, xg=True)
@@ -742,7 +737,7 @@ def FetchURL(request_url, skip_status_code=False):
   Returns:
     Response object return by URL fetch, otherwise None when there's an error.
   """
-  logging.info('URL being fetched: ' + request_url)
+  logging.info('URL being fetched: %s', request_url)
   try:
     response = urlfetch.fetch(request_url)
   except urlfetch_errors.DeadlineExceededError:
@@ -755,7 +750,7 @@ def FetchURL(request_url, skip_status_code=False):
     return None
   if skip_status_code:
     return response
-  elif response.status_code != 200:
+  if response.status_code != 200:
     logging.error('ERROR %s checking %s', response.status_code, request_url)
     return None
   return response
@@ -775,7 +770,7 @@ def GetBuildDetailsFromStdioLink(stdio_link):
     # This wasn't a buildbot formatted link.
     return no_details
   base_url, master, bot, buildnumber, step = m.groups()
-  bot = urllib.unquote(bot)
+  bot = six.moves.urllib.parse.unquote(bot)
   return base_url, master, bot, buildnumber, step
 
 
@@ -812,3 +807,83 @@ def IsMonitored(sheriff_client, test_path):
   if subscriptions:
     return True
   return False
+
+
+def GetBuildbucketUrl(build_id):
+  if build_id:
+    return 'https://ci.chromium.org/b/%s' % build_id
+  return ''
+
+
+def RequestParamsMixed(req):
+  """
+  Returns a dictionary where the values are either single
+  values, or a list of values when a key/value appears more than
+  once in this dictionary.  This is similar to the kind of
+  dictionary often used to represent the variables in a web
+  request.
+  """
+  result = {}
+  multi = {}
+  for key, value in req.values.items(True):
+    if key in result:
+      # We do this to not clobber any lists that are
+      # *actual* values in this dictionary:
+      if key in multi:
+        result[key].append(value)
+      else:
+        result[key] = [result[key], value]
+        multi[key] = None
+    else:
+      result[key] = value
+  return result
+
+
+def SanitizeArgs(args, key_name, default):
+  if key_name not in args:
+    logging.warning(
+        '%s is not found in the query arguments. Using "%s" as default.',
+        key_name, default)
+    return default
+  value = args[key_name]
+  if value in ('', 'undefined'):
+    logging.warning('%s has %s as the value. Using "%s" as default.', key_name,
+                    value, default)
+    return default
+  return value
+
+
+def LogObsoleteHandlerUsage(handler, method):
+  class_name = type(handler).__name__
+  logging.warning('Obsolete PY2 handler is called unexpectedly. %s:%s',
+                  class_name, method)
+
+
+def ConvertBytesBeforeJsonDumps(src):
+  """ convert a json object to safe to do json.dumps()
+
+  During the python 3 migration, we have seen multiple cases that raw data
+  is loaded as part of a json object but in bytes. This will fail the
+  json.dumps() calls on this object. We want to convert all the bytes to
+  avoid this situation.
+  """
+
+  if isinstance(src, dict):
+    for k, v in src.items():
+      if isinstance(v, bytes):
+        src[k] = six.ensure_str(v)
+      else:
+        src[k] = ConvertBytesBeforeJsonDumps(v)
+  elif isinstance(src, list):
+    for i, v in enumerate(src):
+      src[i] = ConvertBytesBeforeJsonDumps(v)
+  elif isinstance(src, bytes):
+    return six.ensure_str(src)
+  return src
+
+
+def ShouldDelayIssueReporting():
+  ''' Tells whether issue should not have the component/label/cc when created.
+  '''
+  # At the beginning, we will randomly pick 50% of the issues.
+  return random.randrange(2) == 0

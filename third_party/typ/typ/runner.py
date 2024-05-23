@@ -18,6 +18,7 @@ import inspect
 import json
 import os
 import pdb
+import re
 import sys
 import unittest
 import traceback
@@ -36,8 +37,8 @@ if path_to_file.endswith('.pyc'):  # pragma: no cover
 dir_above_typ = os.path.dirname(os.path.dirname(path_to_file))
 dir_cov = os.path.join(os.path.dirname(dir_above_typ), 'coverage')
 for path in (dir_above_typ, dir_cov):
-  if path not in sys.path:  # pragma: no cover
-    sys.path.append(path)
+    if path not in sys.path:  # pragma: no cover
+        sys.path.append(path)
 
 from typ import artifacts
 from typ import json_results
@@ -45,7 +46,7 @@ from typ import result_sink
 from typ.arg_parser import ArgumentParser
 from typ.expectations_parser import TestExpectations, Expectation
 from typ.host import Host
-from typ.pool import make_pool
+from typ.pool import make_pool_group
 from typ.stats import Stats
 from typ.printer import Printer
 from typ.test_case import TestCase as TypTestCase
@@ -55,6 +56,13 @@ from typ.version import VERSION
 Result = json_results.Result
 ResultSet = json_results.ResultSet
 ResultType = json_results.ResultType
+FailureReason = json_results.FailureReason
+
+# Matches the first line of stack entries in formatted Python tracebacks.
+# The first capture group is the name of the file, the second is the line.
+# The method name is not extracted.
+# See: https://github.com/python/cpython/blob/3.10/Lib/traceback.py#L440
+_TRACEBACK_FILE_RE = re.compile(r'^  File "[^"]*[/\\](.*)", line ([0-9]+), in ')
 
 
 def main(argv=None, host=None, win_multiprocessing=None, **defaults):
@@ -155,6 +163,7 @@ class Runner(object):
         self.metadata = {}
         self.path_delimiter = json_results.DEFAULT_TEST_SEPARATOR
         self.artifact_output_dir = None
+        self.tag_conflict_checker = None
 
         # initialize self.args to the defaults.
         parser = ArgumentParser(self.host)
@@ -263,17 +272,16 @@ class Runner(object):
             self._summarize(full_results)
             self._write(self.args.write_full_results_to, full_results)
             upload_ret = self._upload(full_results)
-            if not ret:
-                ret = upload_ret
             reporting_end = h.time()
             self._add_trace_event(trace, 'run', find_start, reporting_end)
             self._add_trace_event(trace, 'discovery', find_start, find_end)
             self._add_trace_event(trace, 'testing', find_end, test_end)
             self._add_trace_event(trace, 'reporting', test_end, reporting_end)
             self._write(self.args.write_trace_to, trace)
-            self.report_coverage()
-        else:
-            upload_ret = 0
+            cov_ret = self.report_coverage() if self.args.coverage else 0
+            # Exit with the code of the first failing step, but do not skip
+            # any steps with short-circuiting.
+            ret = ret or upload_ret or cov_ret
 
         return ret, full_results, trace
 
@@ -413,7 +421,7 @@ class Runner(object):
             if not source:
                 source = self.top_level_dirs + self.args.path
             self.coverage_source = source
-            self.cov = coverage.coverage(source=self.coverage_source,
+            self.cov = coverage.Coverage(source=self.coverage_source,
                                          data_suffix=True)
             self.cov.erase()
 
@@ -439,7 +447,8 @@ class Runner(object):
 
         expectations = TestExpectations(set(args.tags), args.ignored_tags)
         err, msg = expectations.parse_tagged_list(
-            contents, args.expectations_files[0])
+            contents, args.expectations_files[0],
+            tags_conflict=self.tag_conflict_checker)
         if err:
             self.print_(msg, stream=self.host.stderr)
             return err
@@ -583,10 +592,14 @@ class Runner(object):
             jobs = 1
 
         child = _Child(self)
-        pool = make_pool(h, jobs, _run_one_test, child,
-                         _setup_process, _teardown_process)
+        pool_group = make_pool_group(h, jobs, self.args.stable_jobs,
+                                     _run_one_test, child, _setup_process,
+                                     _teardown_process,
+                                     self.args.use_global_pool)
+        pool_group.make_global_pool()
 
-        self._run_one_set(self.stats, result_set, test_set, jobs, pool)
+        self._run_one_set(self.stats, result_set, test_set, jobs,
+                          pool_group)
 
         tests_to_retry = sorted(get_tests_to_retry(result_set))
         retry_limit = self.args.retry_limit
@@ -614,13 +627,14 @@ class Runner(object):
                         iteration=iteration) for name in tests_to_retry]
                 tests_to_retry = test_set
                 retry_set = ResultSet()
-                self._run_one_set(stats, retry_set, tests_to_retry, 1, pool)
+                self._run_one_set(stats, retry_set, tests_to_retry, 1,
+                                  pool_group)
                 result_set.results.extend(retry_set.results)
                 tests_to_retry = get_tests_to_retry(retry_set)
                 retry_limit -= 1
-            pool.close()
+            pool_group.close_global_pool()
         finally:
-            self.final_responses.extend(pool.join())
+            self.final_responses.extend(pool_group.join_global_pool())
 
         if retry_limit != self.args.retry_limit:
             self.print_('')
@@ -634,12 +648,44 @@ class Runner(object):
 
         return (retcode, full_results)
 
-    def _run_one_set(self, stats, result_set, test_set, jobs, pool):
+    def _run_one_set(self, stats, result_set, test_set, jobs, pool_group):
         self._skip_tests(stats, result_set, test_set.tests_to_skip)
-        self._run_list(stats, result_set,
-                       test_set.parallel_tests, jobs, pool)
-        self._run_list(stats, result_set,
-                       test_set.isolated_tests, 1, pool)
+        # Don't bother spinning up any pools if we don't have any use for them.
+        have_tests = test_set.parallel_tests or test_set.isolated_tests
+        if not have_tests:
+            return
+
+        # If we know we are running all tests serially, reduce overhead a bit
+        # by only using one pool.
+        if jobs == 1:
+            pool = pool_group.make_serial_pool()
+            try:
+                self._run_list(stats, result_set, test_set.parallel_tests,
+                               jobs, pool)
+                self._run_list(stats, result_set, test_set.isolated_tests,
+                               jobs, pool)
+                pool_group.close_serial_pool()
+            finally:
+                self.final_responses.extend(pool_group.join_serial_pool())
+            return
+
+        if test_set.parallel_tests:
+            pool = pool_group.make_parallel_pool()
+            try:
+                self._run_list(stats, result_set,
+                               test_set.parallel_tests, jobs, pool)
+                pool_group.close_parallel_pool()
+            finally:
+                self.final_responses.extend(pool_group.join_parallel_pool())
+
+        if test_set.isolated_tests:
+            pool = pool_group.make_serial_pool()
+            try:
+                self._run_list(stats, result_set,
+                               test_set.isolated_tests, 1, pool)
+                pool_group.close_serial_pool()
+            finally:
+                self.final_responses.extend(pool_group.join_serial_pool())
 
     def _skip_tests(self, stats, result_set, tests_to_skip):
         for test_input in tests_to_skip:
@@ -727,7 +773,8 @@ class Runner(object):
             timing_str = ' %.4fs' % result.took
         else:
             timing_str = ''
-        suffix = '%s%s' % (result_str, timing_str)
+        worker_str = ' (worker %d)' % result.worker
+        suffix = '%s%s%s' % (result_str, timing_str, worker_str)
         out = result.out
         err = result.err
         if result.is_regression:
@@ -761,6 +808,7 @@ class Runner(object):
         num_passes = json_results.num_passes(full_results)
         num_failures = json_results.num_failures(full_results)
         num_skips = json_results.num_skips(full_results)
+        num_regressions = json_results.num_regressions(full_results)
 
         if self.args.quiet and num_failures == 0:
             return
@@ -778,6 +826,20 @@ class Runner(object):
                      num_failures,
                      '' if num_failures == 1 else 's'), elide=False)
         self.print_()
+        if num_failures or num_regressions:
+            regressed_tests = json_results.regressed_tests_names(full_results)
+            failed_tests = json_results.failed_tests_names(full_results)
+            expected_failed_tests = failed_tests - regressed_tests
+            regressed_tests = sorted(list(regressed_tests))
+            expected_failed_tests = sorted(list(expected_failed_tests))
+            if expected_failed_tests:
+                self.update('Tests that failed as expected:\n', elide=False)
+                for t in expected_failed_tests:
+                    self.print_('  %s' % t)
+            if regressed_tests:
+                self.update('Tests that regressed (failed unexpectedly)\n', elide=False)
+                for t in regressed_tests:
+                    self.print_('  %s' % t)
 
     def _read_and_delete(self, path, delete):
         h = self.host
@@ -811,16 +873,17 @@ class Runner(object):
             h.print_('Uploading the JSON results raised "%s"' % str(e))
             return 1
 
-    def report_coverage(self):
-        if self.args.coverage:  # pragma: no cover
-            self.host.print_()
-            import coverage
-            cov = coverage.coverage(data_suffix=True)
-            cov.combine()
-            cov.report(show_missing=self.args.coverage_show_missing,
-                       omit=self.args.coverage_omit)
-            if self.args.coverage_annotate:
-                cov.annotate(omit=self.args.coverage_omit)
+    def report_coverage(self):  # pragma: no cover
+        self.host.print_()
+        import coverage
+        cov = coverage.Coverage(data_suffix=True)
+        cov.combine()
+        percentage = cov.report(show_missing=self.args.coverage_show_missing,
+                                omit=self.args.coverage_omit)
+        if self.args.coverage_annotate:
+            cov.annotate(omit=self.args.coverage_omit)
+        # https://coverage.readthedocs.io/en/6.4.2/config.html#report-fail-under
+        return 2 if percentage < cov.get_option('report:fail_under') else 0
 
     def _add_trace_event(self, trace, name, start, end):
         event = {
@@ -860,17 +923,17 @@ class Runner(object):
             args['code'] = result.code
             args['unexpected'] = result.unexpected
             args['flaky'] = result.flaky
+            args['file'] = result.file_path
+            args['line'] = result.line_number
             event['args'] = args
 
             trace['traceEvents'].append(event)
         return trace
 
     def expectations_for(self, test_case):
-      test_name = test_case.id()[len(self.args.test_name_prefix):]
-      if self.has_expectations:
-          return self.expectations.expectations_for(test_name)
-      else:
-          return Expectation(test=test_name)
+        expectations = self.expectations if self.has_expectations else None
+        return _expectations_for(
+            test_case, expectations, self.args.test_name_prefix)
 
     def default_classifier(self, test_set, test):
         if self.matches_filter(test):
@@ -906,7 +969,7 @@ class Runner(object):
         _validate_test_starts_with_prefix(
             self.args.test_name_prefix, test_case.id())
         if self.args.all:
-          return False
+            return False
         test_name = test_case.id()[len(self.args.test_name_prefix):]
         if self.has_expectations:
             expected_results = self.expectations.expectations_for(test_name).results
@@ -918,27 +981,27 @@ class Runner(object):
 
 
 def _test_adder(test_set, classifier):
-        def add_tests(obj):
-            if isinstance(obj, unittest.suite.TestSuite):
-                for el in obj:
-                    add_tests(el)
-            elif (obj.id().startswith('unittest.loader.LoadTestsFailure') or
-                  obj.id().startswith('unittest.loader.ModuleImportFailure')):
-                # Access to protected member pylint: disable=W0212
-                module_name = obj._testMethodName
-                try:
-                    method = getattr(obj, obj._testMethodName)
-                    method()
-                except Exception as e:
-                    if 'LoadTests' in obj.id():
-                        raise _AddTestsError('%s.load_tests() failed: %s'
-                                             % (module_name, str(e)))
-                    else:
-                        raise _AddTestsError(str(e))
-            else:
-                assert isinstance(obj, unittest.TestCase)
-                classifier(test_set, obj)
-        return add_tests
+    def add_tests(obj):
+        if isinstance(obj, unittest.suite.TestSuite):
+            for el in obj:
+                add_tests(el)
+        elif (obj.id().startswith('unittest.loader.LoadTestsFailure') or
+              obj.id().startswith('unittest.loader.ModuleImportFailure')):
+            # Access to protected member pylint: disable=W0212
+            module_name = obj._testMethodName
+            try:
+                method = getattr(obj, obj._testMethodName)
+                method()
+            except Exception as e:
+                if 'LoadTests' in obj.id():
+                    raise _AddTestsError('%s.load_tests() failed: %s'
+                                         % (module_name, str(e)))
+                else:
+                    raise _AddTestsError(str(e))
+        else:
+            assert isinstance(obj, unittest.TestCase)
+            classifier(test_set, obj)
+    return add_tests
 
 
 class _Child(object):
@@ -967,18 +1030,24 @@ class _Child(object):
         self.artifact_output_dir = parent.artifact_output_dir
         self.result_sink_reporter = None
         self.disable_resultsink = parent.args.disable_resultsink
+        self.result_sink_output_file = parent.args.rdb_content_output_file
+        self.jobs = parent.args.jobs
+
+    def expectations_for(self, test_case):
+        expectations = self.expectations if self.has_expectations else None
+        return _expectations_for(test_case, expectations, self.test_name_prefix)
 
 
 def _setup_process(host, worker_num, child):
     child.host = host
     child.result_sink_reporter = result_sink.ResultSinkReporter(
-            host, child.disable_resultsink)
+            host, child.disable_resultsink, child.result_sink_output_file)
     child.worker_num = worker_num
     # pylint: disable=protected-access
 
     if child.coverage:  # pragma: no cover
         import coverage
-        child.cov = coverage.coverage(source=child.coverage_source,
+        child.cov = coverage.Coverage(source=child.coverage_source,
                                       data_suffix=True)
         child.cov._warn_no_data = False
         child.cov.start()
@@ -1008,6 +1077,15 @@ def _teardown_process(child):
 
 
 def _run_one_test(child, test_input):
+    def _get_expected_results_and_retry_on_failure():
+        if child.has_expectations:
+            expectation = child.expectations.expectations_for(test_name)
+            expected_results, should_retry_on_failure = (
+                expectation.results, expectation.should_retry_on_failure)
+        else:
+            expected_results, should_retry_on_failure = {ResultType.Pass}, False
+        return expected_results, should_retry_on_failure
+
     h = child.host
     pid = h.getpid()
     test_name = test_input.name
@@ -1022,12 +1100,8 @@ def _run_one_test(child, test_input):
     # This comes up when using the FakeTestLoader and testing typ itself,
     # but could come up when testing non-typ code as well.
     h.capture_output(divert=not child.passthrough)
-    if child.has_expectations:
-      expectation = child.expectations.expectations_for(test_name)
-      expected_results, should_retry_on_failure = (
-          expectation.results, expectation.should_retry_on_failure)
-    else:
-      expected_results, should_retry_on_failure = {ResultType.Pass}, False
+    (expected_results,
+        should_retry_on_failure) = _get_expected_results_and_retry_on_failure()
     ex_str = ''
     try:
         orig_skip = unittest.skip
@@ -1106,29 +1180,55 @@ def _run_one_test(child, test_input):
         # Clear the artifact implementation so that later tests don't try to
         # use a stale instance.
         if isinstance(test_case, TypTestCase):
-          test_case.set_artifacts(None)
+            test_case.set_artifacts(None)
+
+    # We retrieve the expected results again since it's possible that running
+    # the test changed something, e.g. restarted the browser with new browser
+    # arguments, leading to different tags being generated.
+    (expected_results,
+        should_retry_on_failure) = _get_expected_results_and_retry_on_failure()
 
     took = h.time() - started
-    result = _result_from_test_result(test_result, test_name, started, took, out,
-                                    err, child.worker_num, pid,
-                                    expected_results, child.has_expectations,
-                                    art.artifacts)
+    additional_tags = None
     test_location = inspect.getsourcefile(test_case.__class__)
     test_method = getattr(test_case, test_case._testMethodName)
     # Test methods are often wrapped by decorators such as @mock. Try to get to
     # the actual test method instead of the wrapper.
     if hasattr(test_method, '__wrapped__'):
-      test_method = test_method.__wrapped__
+        test_method = test_method.__wrapped__
     # Some tests are generated and don't have valid line numbers. Such test
     # methods also have a source location different from module location.
     if inspect.getsourcefile(test_method) == test_location:
-      test_line = inspect.getsourcelines(test_method)[1]
+        test_line = inspect.getsourcelines(test_method)[1]
     else:
-      test_line = None
+        test_line = None
+
+    # If the test signaled that it should be retried on failure, do so.
+    if isinstance(test_case, TypTestCase):
+        additional_tags = test_case.additionalTags
+        # Handle the case where the test called self.skipTest, e.g. if it
+        # determined that the test is not valid on the current configuration.
+        if test_result.skipped and test_case.programmaticSkipIsExpected:
+            result = Result(test_name, ResultType.Skip, started, took,
+                           child.worker_num, expected={ResultType.Skip},
+                           unexpected=False, pid=pid)
+            result.result_sink_retcode =\
+                    child.result_sink_reporter.report_individual_test_result(
+                        result, child.artifact_output_dir, child.expectations,
+                        test_location, test_line, child.test_name_prefix,
+                        additional_tags)
+            return (result, False)
+        should_retry_on_failure = (should_retry_on_failure
+                                   or test_case.retryOnFailure)
+    result = _result_from_test_result(test_result, test_name, started, took, out,
+                                    err, child.worker_num, pid, test_case,
+                                    expected_results, child.has_expectations,
+                                    art.artifacts)
     result.result_sink_retcode =\
             child.result_sink_reporter.report_individual_test_result(
-                child.test_name_prefix, result, child.artifact_output_dir,
-                child.expectations, test_location, test_line)
+                result, child.artifact_output_dir, child.expectations,
+                test_location, test_line, child.test_name_prefix,
+                additional_tags)
     return (result, should_retry_on_failure)
 
 
@@ -1144,18 +1244,25 @@ def _run_under_debugger(host, test_case, suite,
 
 
 def _result_from_test_result(test_result, test_name, started, took, out, err,
-                             worker_num, pid, expected_results,
+                             worker_num, pid, test_case, expected_results,
                              has_expectations, artifacts):
+    failure_reason = None
     if test_result.failures:
         actual = ResultType.Failure
         code = 1
         err = err + test_result.failures[0][1]
         unexpected = actual not in expected_results
+        for i, failure in enumerate(test_result.failures):
+            if failure_reason is None:
+                failure_reason = _failure_reason_from_traceback(failure[1])
     elif test_result.errors:
         actual = ResultType.Failure
         code = 1
         err = err + test_result.errors[0][1]
         unexpected = actual not in expected_results
+        for i, error in enumerate(test_result.errors):
+            if failure_reason is None:
+                failure_reason = _failure_reason_from_traceback(error[1])
     elif test_result.skipped:
         actual = ResultType.Skip
         err = err + test_result.skipped[0][1]
@@ -1180,9 +1287,90 @@ def _result_from_test_result(test_result, test_name, started, took, out, err,
         unexpected = actual not in expected_results
 
     flaky = False
+    test_func = getattr(test_case, test_case._testMethodName)
+    test_func = getattr(test_func, 'real_test_func', test_func)
+    file_path = inspect.getsourcefile(test_func)
+    line_number = inspect.getsourcelines(test_func)[1]
     return Result(test_name, actual, started, took, worker_num,
                   expected_results, unexpected, flaky, code, out, err, pid,
-                  artifacts)
+                  file_path, line_number, artifacts, failure_reason)
+
+
+def _failure_reason_from_traceback(traceback):
+    """Attempts to extract a failure reason from formatted Traceback data.
+
+    The formatted traceback data handled by this method is that populated on
+    unittest.TestResult objects in the errors and/or failures attribute(s).
+
+    We reverse this formatting process to obtain the underlying failure
+    exception message or assertion failure, excluding stacktrace and other
+    data.
+
+    When reading this method, it is useful to read python unittest sources
+    at the same time, as this reverses some of the formatting defined there.
+    https://github.com/python/cpython/blob/3.10/Lib/unittest/result.py#L119
+    https://github.com/python/cpython/blob/3.10/Lib/unittest/result.py#L173
+    https://github.com/python/cpython/blob/3.10/Lib/traceback.py#L652
+
+    This method may not succeed in extracting a failure reason. In this case,
+    it returns None.
+    """
+    lines = traceback.splitlines()
+
+    # Start line index of the interesting region (the line(s) that has
+    # the assertion failure or exception emssage).
+    start_index = 0
+
+    # End index of the interesting region.
+    end_index = len(lines)
+
+    # The file name and line that raised the exception or assertion failure.
+    # Formatted as "filename.py(123)".
+    context_file_line = None
+
+    in_traceback = False
+    for i, line in enumerate(lines):
+        # Tracebacks precede the interesting message. It is possible
+        # for there to be multiple tracebacks blocks in case of chained
+        # exceptions. E.g. "While handling a XYZError, the following
+        # exception was also raised:". The interesting message is
+        # after all such chained stacks.
+        if line == 'Traceback (most recent call last):':
+            in_traceback = True
+            start_index = i + 1
+            context_file_line = None
+        elif line.startswith('  ') and in_traceback:
+            # Continuation of traceback.
+            start_index = i + 1
+
+            # Keep track of the last file in the traceback.
+            file_match = _TRACEBACK_FILE_RE.match(line)
+            if file_match:
+                context_file_line = '{}({})'.format(
+                    file_match.group(1),
+                    file_match.group(2))
+        else:
+            in_traceback = False
+
+        # The "Stdout:" or "Stderr:" blocks (if present) are after the
+        # interesting failure message.
+        if line == 'Stdout:' or line == 'Stderr:':
+            if i < end_index:
+                end_index = i
+
+    interesting_lines = lines[start_index:end_index]
+    if len(interesting_lines) > 0 and context_file_line is not None:
+        # Let the failure reason be look like:
+        # "my_unittest.py(123): AssertionError: unexpectedly None".
+        #
+        # We include the file and line of the original exception
+        # in failure reason, as basic assertion failures
+        # (true != false, None is not None, etc.) can be too generic
+        # to be clustered in a useful way without this.
+        message = '{}: {}'.format(context_file_line,
+            '\n'.join(interesting_lines).strip())
+        return FailureReason(message)
+    return None
 
 
 def _load_via_load_tests(child, test_name):
@@ -1218,6 +1406,14 @@ def _load_via_load_tests(child, test_name):
 
 def _sort_inputs(inps):
     return sorted(inps, key=lambda inp: inp.name)
+
+
+def _expectations_for(test_case, expectations, test_name_prefix):
+    test_name = test_case.id()[len(test_name_prefix):]
+    if expectations:
+        return expectations.expectations_for(test_name)
+    else:
+        return Expectation(test=test_name)
 
 
 if __name__ == '__main__':  # pragma: no cover

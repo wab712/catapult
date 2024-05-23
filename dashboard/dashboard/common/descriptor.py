@@ -73,7 +73,7 @@ ONE_TWO_TEST_SUITES_KEY = 'one_two_test_suites'
 COMPLEX_CASES_TEST_SUITES_KEY = 'complex_cases_test_suites'
 
 
-class Descriptor(object):
+class Descriptor:
   """Describe a timeseries by its characteristics.
 
   Supports partial test paths (e.g. test suite paths) by allowing some
@@ -102,6 +102,10 @@ class Descriptor(object):
     return 'Descriptor(%r, %r, %r, %r, %r, %r)' % (
         self.test_suite, self.measurement, self.bot, self.test_case,
         self.statistic, self.build_type)
+
+  def __hash__(self):
+    return hash(self.test_suite, self.measurement, self.bot, self.test_case,
+                self.statistic, self.build_type)
 
   def __eq__(self, other):
     return repr(self) == repr(other)

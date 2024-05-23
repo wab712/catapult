@@ -6,8 +6,10 @@ from __future__ import print_function
 from __future__ import division
 from __future__ import absolute_import
 
+import functools
 import json
 import logging
+import six
 
 from dashboard import can_bisect
 from dashboard import pinpoint_request
@@ -20,7 +22,6 @@ from dashboard.services import pinpoint_service
 
 class NotBisectableError(Exception):
   """An error indicating that a bisect couldn't be automatically started."""
-  pass
 
 
 def StartNewBisectForBug(bug_id, project_id):
@@ -38,8 +39,8 @@ def StartNewBisectForBug(bug_id, project_id):
   try:
     return _StartBisectForBug(bug_id, project_id)
   except NotBisectableError as e:
-    logging.info('New bisect errored out with message: ' + e.message)
-    return {'error': e.message}
+    logging.info('New bisect errored out with message: %s', str(e))
+    return {'error': str(e)}
 
 
 def _StartBisectForBug(bug_id, project_id):
@@ -65,6 +66,7 @@ def _StartBisectForBug(bug_id, project_id):
 
 def _StartPinpointBisect(bug_id, project_id, test_anomaly, test):
   # Convert params to Pinpoint compatible
+  anomaly_keys = utils.ConvertBytesBeforeJsonDumps([test_anomaly.key.urlsafe()])
   params = {
       'test_path': test.test_path,
       'start_commit': test_anomaly.start_revision - 1,
@@ -73,14 +75,14 @@ def _StartPinpointBisect(bug_id, project_id, test_anomaly, test):
       'project_id': project_id,
       'bisect_mode': 'performance',
       'story_filter': test.unescaped_story_name,
-      'alerts': json.dumps([test_anomaly.key.urlsafe()])
+      'alerts': json.dumps(anomaly_keys)
   }
 
   try:
     results = pinpoint_service.NewJob(
         pinpoint_request.PinpointParamsFromBisectParams(params))
   except pinpoint_request.InvalidParamsError as e:
-    raise NotBisectableError(e.message)
+    six.raise_from(NotBisectableError(str(e)), e)
 
   # For compatibility with existing bisect, switch these to issueId/url
   if 'jobId' in results:
@@ -124,7 +126,7 @@ def _ChooseTest(anomalies):
   """
   if not anomalies:
     return None
-  anomalies.sort(cmp=_CompareAnomalyBisectability)
+  anomalies.sort(key=functools.cmp_to_key(_CompareAnomalyBisectability))
   found_excluded_domain = False
   for anomaly_entity in anomalies:
     if can_bisect.IsValidTestForBisect(
@@ -162,7 +164,7 @@ def _CompareAnomalyBisectability(a1, a2):
   """
   if a1.percent_changed > a2.percent_changed:
     return -1
-  elif a1.percent_changed < a2.percent_changed:
+  if a1.percent_changed < a2.percent_changed:
     return 1
   return 0
 

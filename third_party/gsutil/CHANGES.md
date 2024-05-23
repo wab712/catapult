@@ -1,3 +1,664 @@
+Release 5.24 (release date: 2023-05-17)
+======================================
+New Features
+------------------
+- Add shim support for du. (#1699)
+- Make state directory for mTLS certs configurable. (#1680)
+
+Bug Fixes
+------------------
+- mTLS: Add support for certificates without passphrase. (#1700)
+- Fix SSL missing error by updating Linux Python 3.5 version. (#1692)
+
+Other Changes
+------------------
+- Update google auth library to latest version. (#1689)
+- Several documentation updates and clarifications.
+
+Release 5.23 (release date: 2023-04-12)
+======================================
+Other Changes
+------------------
+- Modified gsutil config to reflect the recent OAuth2 flow deprecation.
+- Several documentation updates and clarifications.
+
+Release 5.21 (release date: 2023-03-01)
+======================================
+New Features
+------------------
+- Add shim for hmac command (#1670)
+
+Bug Fixes
+------------------
+- Fix external_account_authorized_user implementation in wrapped_credentials.py + update google-auth dependency (#1674)
+- Fix error message for external account authorized user credentials (#1671)
+- Handles OAuthException from google-auth (#1672)
+
+Other Changes
+------------------
+- Several documentation updates and clarifications.
+
+Release 5.20 (release date: 2023-02-02)
+======================================
+Other Changes
+------------------
+- Small help updates to acl examples and the cp -j flag (#1667)
+
+Release 5.19 (release date: 2023-01-26)
+======================================
+Bug Fixes
+------------------
+- Make reauth check opt-in and silence non-auth-related exceptions. (#1664)
+- Fix rpo get shim for s3 buckets (#1659)
+
+Other Changes
+------------------
+- Several documentation updates and clarifications.
+
+Release 5.18 (release date: 2023-01-12)
+======================================
+New Features
+------------------
+- Add shim support for DefAcl get & set (#1654)
+- Add shim support for rpo set (#1650)
+- Add shim support for the rpo flag in the mb command (#1649)
+- Add shim support for ACL commands (#1638)
+- Add shim support for custom dual regions (#1645)
+- Add shim support for the hash command (#1644)
+- Add rsync -y option to compliment -x (#1642)
+- Add shim support for retention commands (#1641)
+- Add shim support for additional headers (#1634)
+- Add shim support for labels commands (#1636)
+- Add shim support for CORS commands (#1635)
+- Add shim support for IAM commands (#1627)
+
+Bug Fixes
+------------------
+- Handle reauth challenges gracefully in transfer commands. (#1655)
+- Shim gsutil ls behavior of always attempting to fetch hashes. (#1640)
+
+Other Changes
+------------------
+- Add a warning about the deprecation of the OAuth2 flow. (#1658)
+- Several documentation updates and clarifications.
+
+Release 5.17 (release date: 2022-12-01)
+======================================
+New Features
+------------------
+- Shim autoclass command (#1618)
+- Updating WrappedCredentials to allow for External Account Authorized User Credentials (#1617)
+
+Bug Fixes
+------------------
+- Fix rsync -x test to address issue #1615 (#1629, #1623)
+
+Other Changes
+------------------
+- Pin httplib2 to 0.20.4 version (#1628)
+- Several documentation updates and clarifications.
+
+Release 5.16 (release date: 2022-10-27)
+======================================
+New Features
+------------------
+- Shim lifecycle command. (#1610)
+- Shim bucketpolicy only and ubla commands (#1608)
+ 
+Bug Fixes
+------------------
+- Fixed rsync -x test for Windows and updated docs to match (#1609)
+ 
+Other Changes
+------------------
+- Update google auth dependency for interactive mode, and url validation (#1614)
+
+Release 5.15 (release date: 2022-10-18)
+======================================
+Bug Fixes
+------------------
+- Wildcard iterator should exclude filepaths from rsync -x (#1602)
+- Ensure arbitrary headers are included in every rsync request. (#1600)
+
+Other Changes
+------------------
+- Disable mTLS E2E tests (#1604)
+
+Release 5.14 (release date: 2022-09-22)
+======================================
+New Features
+------------------
+- Support including arbitrary headers in requests. (#1598)
+- Translate retention flag output for mb shim (#1593)
+- Shim cp continue-on-error flag (#1591)
+- Add flag for shimming stat. Stop relying on 'run by shim' property. (#1587)
+
+Bug Fixes
+------------------
+- Update shim get keys (#1595)
+- Update google auth dependency (#1581)
+
+Other Changes
+------------------
+- Update formatting on shim.py (#1597)
+- Mb test parity minus retention. (#1592)
+- Several documentation updates and clarifications.
+
+Release 5.13 (release date: 2022-09-07)
+======================================
+New Features
+------------------
+- Shim now supports mv, compose.
+- The version command will now report on whether the shim is being used.
+
+Other changes
+------------------
+- Shim topic added to additional help.
+- Several documentation updates and clarifications.
+
+Release 5.12 (release date: 2022-08-11)
+======================================
+New Features
+------------------
+- Allow custom storage class flag for parallel composite upload (#1553)
+- Shim requesterpays command (#1552)
+- Shim logging command (#1551)
+- Shim web command (#1550)
+- Shim gsutil rb command (#1549)
+- Shim versioning command to gcloud storage (#1544)
+- Shim stat command (#1543)
+
+Bug Fixes
+------------------
+- Update URL for wrapped external creds test (#1568-#1571)
+- Update CDR regions to a working pair (#1566)
+- Add retries with exponential backoff to the flow that authorizes the service agent to use CMEKs (#1541)
+- Fix linter check in shim_util.py (#1546)
+- Edit test_nearline_applied_to_parallel_composite_upload so shim passes. (#1558)
+- Skip all CDR tests on XML API as there's no way to list placement. (#1556)
+
+Other Changes
+------------------
+- Increased test parity coverage
+- Updated the cat -r command error behavior (#1531)
+
+Release 5.11 (release date: 2022-07-07)
+======================================
+New Features
+------------------
+- Bring back placement flag for custom dual regions (#1525)
+- Shim rewrite command. (#1537)
+- Shim retention object-based subcommands. (#1536)
+- Test parity for streaming uploads. (#1533)
+- Add pap flag shim support. (#1522)
+- Shim support for kms (#1507)
+- Update rm shim test parity (#1521)
+- Shim cp -I flag (#1520)
+- Add shim support for notification commands. (#1518)
+- Add shim support for cp ACL flags (#1519)
+- Turning off metrics when the shim is enabled. (#1512)
+- Add shim support for gzip flags. (#1511)
+- Shim translation and test parity for cp manifest flag. (#1497)
+- Run by shim env var. (#1510)
+- Shim preserve posix (-P) flag. (#1506)
+
+Bug Fixes
+------------------
+- Added flush to cat\_helper.py (#1528)
+
+Other Changes
+------------------
+- Replace deprecated threading.currentThread with current\_thread (#1524)
+- Updated boto to latest commit
+- Several documentation updates and clarifications.
+
+Release 5.10 (release date: 2022-04-26)
+======================================
+New Features
+------------------
+- Shim support for defstorageclass (#1494)
+
+Bug Fixes
+------------------
+- Include Third Party Identification as a Credential Type supporting various use cases (#1501)
+
+Other Changes
+------------------
+- Several documentation updates and clarifications.
+
+Release 5.9 (release date: 2022-04-07)
+======================================
+New Features
+------------------
+- Add cp -v and -n flags for shim translation. (#1490)
+- Add cp -s flag to shim translation. (#1488)
+
+Bug Fixes
+------------------
+- Prevent copies outside of destination directory. (#1491)
+- Fix copying duplicate file name conflicts by preserving recursive copy (#1465)
+
+Other Changes
+------------------
+- Run Python 3.5 tests with 3.5.2 (#1482)
+- Backfill the changes required to skip the test\_gsutil tests for gsutil.par tests. (#1481)
+- Custom dual region: Drop placement flag as multiple locations can now be provided via -l flag (#1480)
+- Several documentation updates and clarifications.
+
+Release 5.8 (release date: 2022-03-07)
+======================================
+New Features
+------------------
+- Allow gsutil to transparently call gcloud storage cp or rm through a shim (enable via the Boto configuration GSUTil:use_gcloud_storage=True)
+- Allow external account based credentials (#1452)
+
+Bug Fixes
+------------------
+- Prevent error by only allowing super-user from changing file user when preserve POSIX is enabled. (#1461)
+
+Other Changes
+------------------
+- Several documentation updates and clarifications.
+
+Release 5.6 (release date: 2022-01-06)
+======================================
+New Features
+------------------
+- Check `GCE_METADATA_HOST` environment variable (#1426)
+- Allow service account to use private token endpoint (#1417)
+- Add default encryption key option (-k) to mb command (#1414)
+
+Bug Fixes
+------------------
+- PAP: Handle unspecified as well as inherited (#1404)
+
+Other Changes
+------------------
+- Several documentation updates and clarifications.
+
+Release 5.5 (release date: 2021-11-11)
+======================================
+Bug Fixes
+------------------
+- Close upload stream before we try to unlink temp file (#1144)
+- Do not perform hash validation if check_hashes=never even if Content-MD5 is set (#1382)
+
+Other Changes
+------------------
+- Add warning for unsupported double wildcard use. (#1386)
+- Changing test email and user references to safer values. (#1396)
+- Several documentation updates and clarifications.
+
+Release 5.4 (release date: 2021-10-11)
+======================================
+New Features
+------------------
+- Support for new backend features.
+- Re-implement removal of project convenience groups (#1365)
+- Add suffix to user agent to differentiate between types of rewrite command (#1359)
+- mb command: raise error if json only flags are used for xml API  (#1358)
+- Improve `gsutil rm` and `gsutil rewrite` help pages. (#1355)
+- Link fix and term update in help docs (#1354)
+
+Other Changes
+------------------
+- Improvements to the Wildcard help topic (#1367)
+- Improve `gsutil rm` and `gsutil rewrite` help pages. (#1355)
+- Link fix and term update in help docs (#1354)
+
+Release 5.3 (release date: 2021-09-30)
+======================================
+New Features
+------------------
+- Add support for Turbo Replication (RPO). (#1351)
+
+Bug Fixes
+------------------
+- Allow the removal of project convenience groups. (#1350)
+
+Other Changes
+------------------
+- Several documentation updates and clarifications.
+
+Release 5.2 (release date: 2021-09-23)
+======================================
+New Features
+------------------
+- Add cp support for end-to-end encryption via the split-trust encryption tool (STET). (#1338)
+
+Bug Fixes
+------------------
+- Use custom endpoints for resumable updloads on the XML API. (#1333)
+
+Other Changes
+------------------
+- Dropped support for Python 2 to patch RSA security issues. (#1339)
+- Several documentation updates and clarifications.
+
+Release 4.68 (release date: 2021-09-14)
+=======================================
+Bug Fixes
+------------------
+- Improve content type inference for some common extensions. (#1321)
+- Copy Content-Encoding from first object in compose command. (#1320)
+- Support generation querying for ls command. (#1319)
+
+Other Changes
+------------------
+- Add a message encouraging py3 upgrade. (#1322)
+- Update mock library version. (#1315)
+- Several documentation updates and clarifications.
+
+Release 4.67 (release date: 2021-08-16)
+=======================================
+Bug Fixes
+------------------
+- Update pyu2f to latest version to fix a security key reauth bug (#1310)
+
+Other Changes
+------------------
+ - Several documentation updates and clarifications.
+
+Release 4.66 (release date: 2021-07-29)
+=======================================
+New Features
+------------------
+ - Onboard mTLS support with AIP-4114 for gsutil (#1302)
+
+Other Changes
+------------------
+ - Several documentation updates and clarifications.
+
+Release 4.65 (release date: 2021-07-02)
+=======================================
+New Features
+------------------
+ - Add gsutil support for Public Access Prevention (#1255)
+
+Bug Fixes
+------------------
+ - Fix raising-bad-type yapf errors. (#1303)
+
+Other Changes
+------------------
+ - Link fix pointing to CGC docs again (#1291).
+ - Backfill some small doc changes (#1294)
+ - Small text tweak (#1293)
+ - Update CHECKSUM and VERSION for 4.64 release.
+ - Update CHANGES.md for 4.64 release.
+ - Delete encryption addhelp page (#1297)
+ - Putting cl/381035251 into github (#1296)
+ - Backfill cl/381932961 (#1298)
+
+Release 4.64 (release date: 2021-06-18)
+=======================================
+Bug Fixes
+------------------
+ - None
+
+Other Changes
+------------------
+ - Link fix pointing to CGC docs.
+
+Release 4.63 (release date: 2021-06-09)
+=======================================
+Bug Fixes
+------------------
+ - Update warning text on KMS access denied (#1278)
+ - Make ** to represent zero or more folders for cloud urls (#1277)
+ - Raise error if final destination path ends with a delimiter. (#1273)
+
+Other Changes
+------------------
+ - Fix flaky test for rm using preconditions (#1288)
+ - Fix pyenv issue for macOS (#1280)
+ - Fix rewrite tests (#1279)
+ - Remove unused progress callback. (#1274)
+ - Several documentation updates and clarifications.
+
+Release 4.62 (release date: 2021-05-13)
+=======================================
+New Features
+------------------
+ - Add ignore-existing option for rsync (#1183).
+ - Show satisifiesPZS info in bucket info listing (ls -Lb). (#1191)
+ - Support composite uploads with KMS. (#1214)
+ - Enforce custom endpoints through multipart copies and complex downloads. (#1247, #1250)
+
+Bug Fixes
+------------------
+ - rm will continue on object 404s. (#1033)
+ - Update boto submodule to include a fix for integrity checks with KMS. (#1258)
+ - iam ch is now case-insensitive for public members and member types. (#1241)
+ - Support skipping integrity checks in daisy chain transfers. (#1257)
+ - Ensure the correct content-length is provided for incomplete downloads. (#1231)
+ - Fix daisy chain for windows. (#1251)
+ - Fix stats crashing because of nanosecs in custom-time. (#1246)
+ - Delete connections after fork. (#1238)
+ - Patch md5 import for compliance on Red Hat FIPS mode distributions. (#1224)
+ - Handle case where there are too many slashes after CloudUrl scheme. (#1237)
+ - Allow specifying object generations in compose. (#1229)
+ - Raise error in setmeta if no headers are provided. (#1227)
+ - Fix encoding issue for rfc822 messages. (#1234)
+ - Fix StreamExhausted Error handling for Resumable uploads. (#1232)
+ - Fix wildcard ** bug. (#1235)
+ - Fix alignment of ls -l output. (#1219)
+ - Fix newlines around lists. (#1220)
+
+Other Changes
+------------------
+ - Fix sonatype errors. (#1266)
+ - gslib: boto\_util: implement a HasUserSpecifiedGsHost() helper. (#1265)
+ - Adding warning to rsync if streams or named paths are included in a folder. (#1031)
+ - Improve parallelism warnings. (#1226)
+ - Several documentation updates and clarifications.
+
+Release 4.61 (release date: 2021-04-06)
+=======================================
+Bug Fixes
+------------------
+ - Update to RSA v4.5.
+ - CopyHelper accepts kms check bypass. (#1217)
+
+Other Changes
+------------------
+ - Doc updates.
+
+Release 4.60 (release date: 2021-03-11)
+=======================================
+Bug Fixes
+------------------
+ - Fixed proxy connections when using the GCS XML API.
+ - Improve reliability when multiple instances of gsutil transfer to the same destination. (#1202)
+
+Other Changes
+------------------
+ - Remove TravisCI and update "check for CI" references to use GitHub CI. (#1200)
+ - Several documentation updates and clarifications.
+
+Release 4.59 (release date: 2021-02-10)
+======================================
+New Features
+------------------
+ - Add ignore-existing option for rsync (#1183).
+ - Show satisifiesPZS info in bucket info listing (ls -Lb) (#1191).
+
+Bug Fixes
+------------------
+ - Register integration test failures in kokoro script (#1189).
+
+Other Changes
+------------------
+ - Use respectful code (#1190).
+ - Several documentation updates and clarifications.
+
+Release 4.58 (release date: 2021-01-21)
+======================================
+Bug Fixes
+------------------
+ - Fix more occurrences of encodestring/decodestring (#1177)
+ - Ignore the .github directory for updates (#1164)
+ - Make signurl use generation information. (#1169)
+ - Fix UnicodeEncodeError in Python2 for help metadata command (#1172)
+ - Open files in non-append mode to make stripe functionality work in Lustre file systems (#1171)
+ - Persist request reason header for resumable uploads and downloads. (#1170)
+ - improve upload speed significantly when it runs on Windows (#1146)
+ - Add perf-trace-token support for resumable uploads. (#1168)
+ - Improve error message when a bucket's name collides with another. (#1166)
+ - Fix formatting for empty CORS JSON document (#1156)
+
+Other Changes
+------------------
+ - Several documentation updates and clarifications.
+ - Add CI checks for Python 3.8 (#1167)
+
+ Release 4.57 (release date: 2020-12-08)
+======================================
+Bug Fixes
+------------------
+ - Remove Unicode character from config command that was causing Python 2 issues.
+ - Sync docs with web.
+
+Release 4.56 (release date: 2020-12-03)
+======================================
+New Features
+------------------
+ - mTLS/DCA Authentication (#1141, #1122, #1142)
+ - Add GitHub Actions CI (#1153)
+
+Bug Fixes
+------------------
+ - Delete the projects.py help topic (#1154)
+ - Format fix for cp.py (#1152)
+
+Release 4.55 (release date: 2020-11-12)
+======================================
+Bug Fixes
+------------------
+ - Prevent trailing spaces in json output of iam get (#977)
+ - Fix deprecation warnings due to invalid escape sequences. (#1119)
+ - Use is_alive in favour of isAlive for Python 3.9 compatibility. (#1121)
+ - Fix for base64.{encode/decode}string in python 3.9 (#1129)
+
+Other Changes
+------------------
+ - Several documentation updates and clarifications.
+
+Release 4.54 (release date: 2020-10-22)
+======================================
+New Features
+------------------
+ - Add userProject support to signurl (#1068)
+
+Bug Fixes
+------------------
+ - Explicitly set multiprocessing start method to 'fork' (#1107)
+ - Headers can now be removed (#1091)
+ - Fix CommandException.informational attribute error (#1109)
+ - Fix broken signurl error message. (#1097)
+
+Other Changes
+------------------
+ - Warn when disabling parallel composite uploads for KMS encryption. (#1102)
+ - Handle SAML reauth challenge. (#1106)
+ - Several documentation updates and clarifications.
+
+Release 4.53 (release date: 2020-08-19)
+======================================
+Bug Fixes
+------------------
+- Remove socksipy dependency to fix proxy authentication (#1084)
+- Retry on errors relating to region specification for S3 (#1049)
+
+Other Changes
+------------------
+- Prompt Daisy chain users to try STS (#1077)
+- Add new IAM types, and disable URL parsing for  IAM b/c it has subcommands. (#1067)
+- Many text updates and clarifications.
+
+Release 4.52 (release date: 2020-07-07)
+======================================
+Bug Fixes
+------------------
+- Fix tests using wrong AWS credentials if AWS CLI is installed. (#1056)
+- Fix `AttributeError: module 'gslib' has no attribute 'USER_AGENT'`. (#1052)
+- Fix encoding error in `user_agent_helper`. (#1055)
+- Fix stdout ordering issue in hash command. (#1037)
+- Fix multithread race condition for cp/mv command when multiple operations are attempting to create the same directory. (#1027)
+- Fix OSError on interrupted rsync -d. (#1042)
+
+Other Changes
+------------------
+- Many text updates and clarifications.
+
+Release 4.51 (release date: 2020-05-19)
+======================================
+Bug Fixes
+------------------
+- Fixed file permissions for credstor2 and tracker files (#1002 and # 1005)
+- Added a check to restrict the duration (-d option) for signurl command
+  to 12 hours if -u flag is used. (#1014)
+- Updated rsync command to try patching before overwriting,
+  rather than checking ACL (#1016)
+
+Other Changes
+------------------
+- Several documentation updates and clarifications.
+
+Release 4.50 (release date: 2020-04-30)
+======================================
+New Features
+------------------
+- Switched to Using V4 signature as default for S3 (#981)
+
+Bug Fixes
+------------------
+- Updated rsa library to release-4.0 (#992)
+- Updated test script to install pyenv if missing for kokoro (#990)
+- Fixed print ordering in kms set by using print instead of
+  text_util.print_to_fd (#974)
+
+Other Changes
+------------------
+- Several documentation updates and clarifications (#969) (#987)
+
+Release 4.49 (release date: 2020-03-26)
+======================================
+New Features
+------------------
+- Added support for service account impersonation for signurl.
+
+Bug Fixes
+------------------
+- Fixed an issue with rsync throwing error when the destination url is a prefix of
+  an existing object.
+
+Other Changes
+------------------
+- Several documentation updates and clarifications.
+
+Release 4.48 (release date: 2020-02-28)
+======================================
+Bug Fixes
+------------------
+- Fixed special character handling in filenames on Windows with Python3.
+- Fixed issue while transferring binary files from S3 with Python3.
+- Fixed KMS tests, so that keys are created in the same region as their buckets.
+
+Other Changes
+------------------
+- Several documentation updates and clarifications.
+
+Release 4.47 (release date: 2020-01-10)
+======================================
+New Features
+------------------
+- Added support for the new archive storage class.
+
+Other Changes
+------------------
+- Several documentation updates and clarifications.
+
 Release 4.46 (release date: 2019-10-31)
 =======================================
 Bug Fixes
@@ -11,7 +672,7 @@ Bug Fixes
  - Fixed exception when using CMEK with resumable uploads.
  - Fixed alias for new ubla command.
  - Fixed default RDNS behavior for backwards compatibility with 4.42 and earlier.
- 
+
 Other Changes
 ------------------
 - Improvements to continuous integration workflow.
@@ -75,7 +736,7 @@ New Features
 ------------------
 - Added HMAC key management for service accounts. This includes a new "hmac"
   command to create/get/list/update/delete HMAC keys on service accounts.
-  Currently, your project must be whitelisted for use with this new HMAC
+  Currently, your project must be added to the allowlist for use with this new HMAC
   functionality. This restriction will be lifted in the near future.
 
  Bug Fixes
@@ -163,8 +824,8 @@ New features
 - Added Bucket Policy Only support to gsutil. This includes a new
   "bucketpolicyonly" command to get/set BPO on existing buckets, as well adding
   the ability to set BPO at bucket creation time with "mb -b". Currently, your
-  project must be whitelisted for use with the new BPO functionality. This
-  restriction will be lifted in the near future.
+  project must be added to the allowlist for use with the new BPO functionality.
+  This restriction will be lifted in the near future.
 
 Bug Fixes
 ------------------
@@ -206,8 +867,8 @@ Release 4.34 (release date: 2018-09-11)
 =======================================
 New features
 ------------------
-- Added bucket lock support to gsutil. Currently, your project must be
-  whitelisted for use with the new bucket lock functionality. This restriction
+- Added bucket lock support to gsutil. Currently, your project must be added to
+  the allowlist for use with the new bucket lock functionality. This restriction
   will be lifted in the near future.
 
 Bug Fixes
@@ -548,7 +1209,7 @@ New Features
   configuration file.
 - Added the iam commmand, which can be used to set IAM policies on
   Google Cloud Storage buckets and objects. This feature is currently in
-  alpha and requires a whitelist application to use it - see
+  alpha and requires a safelist application to use it - see
   "gsutil help iam" for  details.
 - The hash command now supports retrieving hashes for cloud objects.
 
@@ -2414,7 +3075,7 @@ Release 2.0 (release-date: 2012-01-13)
 New Features
 ------------
 
-- Support for for two new installation modes: enterprise and RPM.
+- Support for two new installation modes: enterprise and RPM.
   Customers can now install gsutil one of three ways:
   - Individual user mode (previously the only available mode): unpacking from
     a gzipped tarball (gs://pub/gsutil.tar.gz) or zip file

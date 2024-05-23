@@ -38,6 +38,7 @@ from gslib.utils.constants import NO_MAX
 from gslib.utils.ls_helper import ENCRYPTED_FIELDS
 from gslib.utils.ls_helper import PrintFullInfoAboutObject
 from gslib.utils.ls_helper import UNENCRYPTED_FULL_LISTING_FIELDS
+from gslib.utils.shim_util import GcloudStorageMap
 
 _SYNOPSIS = """
   gsutil stat url...
@@ -71,7 +72,7 @@ _DETAILED_HELP_TEXT = ("""
   printed from the command, it still has an exit status of 0 for an existing
   object and 1 for a non-existent object.
 
-  Note: Unlike the gsutil ls command, the stat command does not support
+  NOTE: Unlike the gsutil ls command, the stat command does not support
   operations on sub-directories. For example, if you run the command:
 
     gsutil -q stat gs://some-bucket/some-subdir/
@@ -121,6 +122,18 @@ class StatCommand(Command):
       subcommand_help_text={},
   )
 
+  gcloud_storage_map = GcloudStorageMap(
+      gcloud_command=[
+          # Formatting done in gcloud.
+          'alpha',
+          'storage',
+          'objects',
+          'list',
+          '--stat'
+      ],
+      flag_map={},
+  )
+
   def RunCommand(self):
     """Command entry point for stat command."""
     stat_fields = ENCRYPTED_FIELDS + UNENCRYPTED_FULL_LISTING_FIELDS
@@ -160,14 +173,14 @@ class StatCommand(Command):
       except AccessDeniedException:
         if logging.getLogger().isEnabledFor(logging.INFO):
           sys.stderr.write('You aren\'t authorized to read %s - skipping' %
-                           url_str)
+                           url_str + '\n')
       except InvalidUrlError:
         raise
       except NotFoundException:
         pass
       if not arg_matches:
         if logging.getLogger().isEnabledFor(logging.INFO):
-          sys.stderr.write(NO_URLS_MATCHED_TARGET % url_str)
+          sys.stderr.write(NO_URLS_MATCHED_TARGET % url_str + '\n')
         found_nonmatching_arg = True
     if found_nonmatching_arg:
       return 1

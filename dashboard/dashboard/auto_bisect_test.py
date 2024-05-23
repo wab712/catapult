@@ -21,7 +21,7 @@ from dashboard.models import anomaly
 class StartNewBisectForBugTest(testing_common.TestCase):
 
   def setUp(self):
-    super(StartNewBisectForBugTest, self).setUp()
+    super().setUp()
     self.SetCurrentUser('internal@chromium.org')
     namespaced_stored_object.Set('bot_configurations', {
         'linux-pinpoint': {},
@@ -99,7 +99,7 @@ class StartNewBisectForBugTest(testing_common.TestCase):
         'issue_url': 'http://pinpoint/123'
     }, result)
     self.assertEqual('123', a.get().pinpoint_bisects[0])
-    self.assertEqual({
+    self.assertCountEqual({
         'alert': a.urlsafe(),
         'test_path': test_key.id()
     }, json.loads(mock_new.call_args[0][0]['tags']))

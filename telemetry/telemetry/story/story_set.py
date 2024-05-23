@@ -10,7 +10,7 @@ from telemetry.story import story as story_module
 from telemetry.wpr import archive_info
 
 
-class StorySet(object):
+class StorySet():
   """A collection of stories.
 
   A typical usage of StorySet would be to subclass it and then call
@@ -57,8 +57,7 @@ class StorySet(object):
   def shared_state_class(self):
     if self._stories:
       return self._stories[0].shared_state_class
-    else:
-      return None
+    return None
 
   @property
   def file_path(self):
@@ -156,8 +155,7 @@ class StorySet(object):
     """
     if cls.__doc__:
       return cls.__doc__.splitlines()[0]
-    else:
-      return ''
+    return ''
 
   def WprFilePathForStory(self, story, target_platform=None):
     """Convenient function to retrieve WPR archive file path.

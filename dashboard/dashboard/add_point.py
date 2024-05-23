@@ -11,6 +11,7 @@ import json
 import logging
 import math
 import re
+import six
 
 from google.appengine.api import datastore_errors
 from google.appengine.api import taskqueue
@@ -22,6 +23,8 @@ from dashboard.common import datastore_hooks
 from dashboard.common import histogram_helpers
 from dashboard.common import math_utils
 from dashboard.models import graph_data
+
+from flask import request, make_response
 
 _TASK_QUEUE_NAME = 'new-points-queue'
 
@@ -46,137 +49,131 @@ _MAX_TEST_PATH_LENGTH = 500
 
 class BadRequestError(Exception):
   """An error indicating that a 400 response status should be returned."""
-  pass
 
 
-class AddPointHandler(request_handler.RequestHandler):
-  """URL endpoint to post data to the dashboard."""
+def AddPointPost():
+  """Validates data parameter and add task to queue to process points.
 
-  def post(self):
-    """Validates data parameter and add task to queue to process points.
+  The row data comes from a "data" parameter, which is a JSON encoding of a
+  list of dictionaries, each of which represents one performance result
+  (one point in a graph) and associated data.
 
-    The row data comes from a "data" parameter, which is a JSON encoding of a
-    list of dictionaries, each of which represents one performance result
-    (one point in a graph) and associated data.
-
-      [
-        {
-          "master": "ChromiumPerf",
-          "bot": "xp-release-dual-core",
-          "test": "dromaeo/dom/modify",
-          "revision": 123456789,
-          "value": 24.66,
-          "error": 2.33,
-          "units": "ms",
-          "supplemental_columns": {
-            "d_median": 24234.12,
-            "d_mean": 23.553,
-            "r_webkit": 423340,
-            ...
-          },
+    [
+      {
+        "master": "ChromiumPerf",
+        "bot": "xp-release-dual-core",
+        "test": "dromaeo/dom/modify",
+        "revision": 123456789,
+        "value": 24.66,
+        "error": 2.33,
+        "units": "ms",
+        "supplemental_columns": {
+          "d_median": 24234.12,
+          "d_mean": 23.553,
+          "r_webkit": 423340,
           ...
         },
         ...
-      ]
-
-    In general, the required fields are "master", "bot", "test" (which together
-    form the test path which identifies the series that this point belongs to),
-    and "revision" and "value", which are the X and Y values for the point.
-
-    This API also supports the Dashboard JSON v1.0 format (go/telemetry-json),
-    the first producer of which is Telemetry. Telemetry provides lightweight
-    serialization of values it produces, as JSON. If a dashboard JSON object is
-    passed, it will be a single dict rather than a list, with the test,
-    value, error, and units fields replaced by a chart_data field containing a
-    Chart JSON dict (see design doc, and example below). Dashboard JSON v1.0 is
-    processed by converting it into rows (which can be viewed as Dashboard JSON
-    v0).
-
-    {
-      "master": "ChromiumPerf",
-      <other row fields>,
-      "chart_data": {
-        "foo": {
-          "bar": {
-            "type": "scalar",
-            "name": "foo.bar",
-            "units": "ms",
-            "value": 4.2,
-          },
-          "summary": {
-            "type": "list_of_scalar_values",
-            "name": "foo",
-            "units": "ms",
-            "values": [4.2, 5.7, 6.8],
-            "std": 1.30512,
-          },
       },
-    }
+      ...
+    ]
 
-    Request parameters:
-      data: JSON encoding of a list of dictionaries.
+  In general, the required fields are "master", "bot", "test" (which together
+  form the test path which identifies the series that this point belongs to),
+  and "revision" and "value", which are the X and Y values for the point.
 
-    Outputs:
-      Empty 200 response with if successful,
-      200 response with warning message if optional data is invalid,
-      403 response with error message if sender IP is not white-listed,
-      400 response with error message if required data is invalid.
-      500 with error message otherwise.
-    """
-    datastore_hooks.SetPrivilegedRequest()
-    try:
-      api_auth.Authorize()
-    except api_auth.ApiAuthException as error:
-      logging.error('Auth error: %s', error)
-      self.ReportError('User unauthorized.', 403)
-      return
+  This API also supports the Dashboard JSON v1.0 format (go/telemetry-json),
+  the first producer of which is Telemetry. Telemetry provides lightweight
+  serialization of values it produces, as JSON. If a dashboard JSON object is
+  passed, it will be a single dict rather than a list, with the test,
+  value, error, and units fields replaced by a chart_data field containing a
+  Chart JSON dict (see design doc, and example below). Dashboard JSON v1.0 is
+  processed by converting it into rows (which can be viewed as Dashboard JSON
+  v0).
 
-    data_str = self.request.get('data')
-    if not data_str:
-      self.ReportError('Missing "data" parameter.', status=400)
-      return
+  {
+    "master": "ChromiumPerf",
+    <other row fields>,
+    "chart_data": {
+      "foo": {
+        "bar": {
+          "type": "scalar",
+          "name": "foo.bar",
+          "units": "ms",
+          "value": 4.2,
+        },
+        "summary": {
+          "type": "list_of_scalar_values",
+          "name": "foo",
+          "units": "ms",
+          "values": [4.2, 5.7, 6.8],
+          "std": 1.30512,
+        },
+    },
+  }
 
-    self.AddData(data_str)
+  Request parameters:
+    data: JSON encoding of a list of dictionaries.
 
-  def AddData(self, data_str):
-    try:
-      data = json.loads(data_str)
-    except ValueError:
-      self.ReportError('Invalid JSON string.', status=400)
-      return
+  Outputs:
+    Empty 200 response with if successful,
+    200 response with warning message if optional data is invalid,
+    403 response with error message if sender IP is not white-listed,
+    400 response with error message if required data is invalid.
+    500 with error message otherwise.
+  """
+  datastore_hooks.SetPrivilegedRequest()
+  try:
+    api_auth.Authorize()
+  except api_auth.ApiAuthException as error:
+    logging.error('Auth error: %s', error)
+    return request_handler.RequestHandlerReportError('User unauthorized.', 403)
 
-    logging.info('Received data: %s', data)
+  data_str = request.values.get('data')
+  if not data_str:
+    return request_handler.RequestHandlerReportError(
+        'Missing "data" parameter.', status=400)
 
-    try:
-      if isinstance(data, dict):
-        if data.get('chart_data'):
-          data = _DashboardJsonToRawRows(data)
-          if not data:
-            return  # No data to add, bail out.
-        else:
-          self.ReportError(
-              'Data should be a list of rows or a Dashboard JSON v1.0 dict.',
-              status=400)
-          return
+  return AddData(data_str)
 
-      if data:
-        # We only need to validate the row ID for one point, since all points
-        # being handled by this upload should have the same row ID.
-        last_added_entity = _GetLastAddedEntityForRow(data[0])
-        _ValidateRowId(data[0], last_added_entity)
 
-      for row_dict in data:
-        ValidateRowDict(row_dict)
-      _AddTasks(data)
-    except BadRequestError as error:
-      # If any of the data was invalid, abort immediately and return an error.
-      self.ReportError(error.message, status=400)
+def AddData(data_str):
+  try:
+    data = json.loads(data_str)
+  except ValueError:
+    return request_handler.RequestHandlerReportError(
+        'Invalid JSON string.', status=400)
+
+  try:
+    if isinstance(data, dict):
+      if data.get('chart_data'):
+        data = _DashboardJsonToRawRows(data)
+        if not data:
+          return make_response('')  # No data to add, bail out.
+      else:
+        return request_handler.RequestHandlerReportError(
+            'Data should be a list of rows or a Dashboard JSON v1.0 dict.',
+            status=400)
+
+    if data:
+      # We only need to validate the row ID for one point, since all points
+      # being handled by this upload should have the same row ID.
+      last_added_entity = _GetLastAddedEntityForRow(data[0])
+      _ValidateRowId(data[0], last_added_entity)
+
+    for row_dict in data:
+      ValidateRowDict(row_dict)
+    _AddTasks(data)
+    return make_response('')
+  except BadRequestError as e:
+    # If any of the data was invalid, abort immediately and return an error.
+    return request_handler.RequestHandlerReportError(str(e), status=400)
 
 
 def _ValidateNameString(value, name):
   if not value:
     raise BadRequestError('No %s name given.' % name)
-  if not isinstance(value, basestring):
+  if not isinstance(value, six.string_types):
     raise BadRequestError('Error: %s must be a string' % name)
   if '/' in value:
     raise BadRequestError('Illegal slash in %s' % name)
@@ -275,7 +272,8 @@ def _TestSuiteName(dash_json_dict):
     try:
       name = dash_json_dict['chart_data']['benchmark_name']
     except KeyError as e:
-      raise BadRequestError('Could not find test suite name. ' + e.message)
+      six.raise_from(
+          BadRequestError('Could not find test suite name. ' + str(e)), e)
 
   _ValidateNameString(name, 'test_suite_name')
 
@@ -413,11 +411,15 @@ def _FlattenTrace(test_suite_name,
   elif trace_name != 'summary' and is_ref:
     name += '_ref'
 
+  units = trace.get('units')
+  if units is None:
+    raise BadRequestError('Units must be specified in the chart data')
+
   row_dict = {
       'test': name,
       'value': value,
       'error': error,
-      'units': trace['units'],
+      'units': units,
       'tracing_uri': tracing_uri,
       'benchmark_description': benchmark_description,
   }
@@ -457,8 +459,9 @@ def _ExtractValueAndError(trace):
       return float('nan'), 0
     try:
       return float(value), 0
-    except:
-      raise BadRequestError('Expected scalar value, got: %r' % value)
+    except Exception as e:  # pylint: disable=broad-except
+      six.raise_from(
+          BadRequestError('Expected scalar value, got: %r' % value), e)
 
   if trace_type == 'list_of_scalar_values':
     values = trace.get('values')
@@ -488,7 +491,7 @@ def _ExtractValueAndError(trace):
 
 
 def _IsNumber(v):
-  return isinstance(v, float) or isinstance(v, int) or isinstance(v, int)
+  return isinstance(v, (float, int))
 
 
 def _GeomMeanAndStdDevFromHistogram(histogram):
@@ -551,11 +554,10 @@ def _ImprovementDirectionToHigherIsBetter(improvement_direction_str):
   # TODO(eakuefner): Fail instead of falling back after fixing crbug.com/459450.
   if improvement_direction_str == 'up':
     return True
-  elif improvement_direction_str == 'down':
+  if improvement_direction_str == 'down':
     return False
-  else:
-    raise BadRequestError('Invalid improvement direction string: ' +
-                          improvement_direction_str)
+  raise BadRequestError('Invalid improvement direction string: ' +
+                        improvement_direction_str)
 
 
 def _GetLastAddedEntityForRow(row):
@@ -568,7 +570,7 @@ def _GetLastAddedEntityForRow(row):
   try:
     last_added_revision_entity = ndb.Key('LastAddedRevision', path).get()
   except datastore_errors.BadRequestError:
-    logging.warn('Datastore BadRequestError when getting %s', path)
+    logging.warning('Datastore BadRequestError when getting %s', path)
     return None
 
   return last_added_revision_entity
@@ -714,8 +716,9 @@ def GetAndValidateRowId(row_dict):
     raise BadRequestError('Required field "revision" missing.')
   try:
     return int(row_dict['revision'])
-  except (ValueError, TypeError):
-    raise BadRequestError('Bad value for "revision", should be numerical.')
+  except (ValueError, TypeError) as e:
+    raise BadRequestError(
+        'Bad value for "revision", should be numerical.') from e
 
 
 def GetAndValidateRowProperties(row):
@@ -747,15 +750,21 @@ def GetAndValidateRowProperties(row):
     raise BadRequestError('No "value" given.')
   try:
     columns['value'] = float(row['value'])
-  except (ValueError, TypeError):
-    raise BadRequestError('Bad value for "value", should be numerical.')
+  except (ValueError, TypeError) as e:
+    six.raise_from(
+        BadRequestError('Bad value for "value", should be numerical.'), e)
   if 'error' in row:
     try:
       error = float(row['error'])
       columns['error'] = error
     except (ValueError, TypeError):
-      logging.warn('Bad value for "error".')
-
+      logging.warning('Bad value for "error".')
+  if 'swarming_bot_id' in row:
+    try:
+      swarming_bot_id = str(row['swarming_bot_id'])
+      columns['swarming_bot_id'] = swarming_bot_id
+    except (ValueError, TypeError):
+      logging.warning('Bad value for "swarming_bot_id".')
   columns.update(_GetSupplementalColumns(row))
   return columns
 
@@ -782,7 +791,7 @@ def _GetSupplementalColumns(row):
   for (name, value) in row.get('supplemental_columns', {}).items():
     # Don't allow too many columns
     if len(columns) == _MAX_NUM_COLUMNS:
-      logging.warn('Too many columns, some being dropped.')
+      logging.warning('Too many columns, some being dropped.')
       break
     value = _CheckSupplementalColumn(name, value)
     if value:
@@ -795,12 +804,12 @@ def _CheckSupplementalColumn(name, value):
   # Check length of column name.
   name = str(name)
   if len(name) > _MAX_COLUMN_NAME_LENGTH:
-    logging.warn('Supplemental column name too long.')
+    logging.warning('Supplemental column name too long.')
     return None
 
   # The column name has a prefix which indicates type of value.
   if name[:2] not in ('d_', 'r_', 'a_'):
-    logging.warn('Bad column name "%s", invalid prefix.', name)
+    logging.warning('Bad column name "%s", invalid prefix.', name)
     return None
 
   # The d_ prefix means "data column", intended to hold numbers.
@@ -808,7 +817,7 @@ def _CheckSupplementalColumn(name, value):
     try:
       value = float(value)
     except (ValueError, TypeError):
-      logging.warn('Bad value for column "%s", should be numerical.', name)
+      logging.warning('Bad value for column "%s", should be numerical.', name)
       return None
 
   # The r_ prefix means "revision", and the value should look like a number,
@@ -821,15 +830,25 @@ def _CheckSupplementalColumn(name, value):
     ]
     if (not value or len(str(value)) > _STRING_COLUMN_MAX_LENGTH
         or not any(re.match(p, str(value)) for p in revision_patterns)):
-      logging.warn('Bad value for revision column "%s". Value: %s', name, value)
+      logging.warning('Bad value for revision column "%s". Value: %s', name,
+                      value)
       return None
     value = str(value)
 
   if name.startswith('a_'):
-    # Annotation column, should be a short string.
+    # Annotation column, is typically a short string.
+    # Bot_ID lists can be long, truncate if exceed max length
     if len(str(value)) > _STRING_COLUMN_MAX_LENGTH:
-      logging.warn('Value for "%s" too long, max length is %d.', name,
-                   _STRING_COLUMN_MAX_LENGTH)
-      return None
+      logging.warning('Value for "%s" too long, truncated to max length %d.',
+                      name,
+                      _STRING_COLUMN_MAX_LENGTH)
+      if isinstance(value, list):
+        while len(str(value)) > _STRING_COLUMN_MAX_LENGTH:
+          value.pop()
+      elif isinstance(value, str):
+        value = value[:_STRING_COLUMN_MAX_LENGTH]
+      else:
+        logging.warning('Value for "%s" is not truncatable', name)
+        return None
 
   return value

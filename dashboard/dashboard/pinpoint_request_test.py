@@ -6,11 +6,12 @@ from __future__ import print_function
 from __future__ import division
 from __future__ import absolute_import
 
+from flask import Flask
 import itertools
 import json
-import mock
 
-import webapp2
+import six
+import mock
 import webtest
 
 from dashboard import pinpoint_request
@@ -29,6 +30,23 @@ _DEFAULT_TEST_ARGS = ''
 _DEFAULT_BUG_ID = 1
 _DEFAULT_PIN = ''
 _DEFAULT_BISECT_MODE = 'performance'
+
+flask_app = Flask(__name__)
+
+
+@flask_app.route('/pinpoint/new/bisect', methods=['POST'])
+def PinpointNewBisectPost():
+  return pinpoint_request.PinpointNewBisectPost()
+
+
+@flask_app.route('/pinpoint/new/perf_try', methods=['POST'])
+def PinpointNewPerfTryPost():
+  return pinpoint_request.PinpointNewPerfTryPost()
+
+
+@flask_app.route('/pinpoint/new/prefill', methods=['POST'])
+def PinpointNewPrefillPost():
+  return pinpoint_request.PinpointNewPrefillPost()
 
 
 def GenerateTryRequestParams(params):
@@ -60,13 +78,8 @@ def GenerateBisectRequestParams(params):
 class PinpointNewPrefillRequestHandlerTest(testing_common.TestCase):
 
   def setUp(self):
-    super(PinpointNewPrefillRequestHandlerTest, self).setUp()
-
-    app = webapp2.WSGIApplication([
-        (r'/pinpoint/new/prefill',
-         pinpoint_request.PinpointNewPrefillRequestHandler)
-    ])
-    self.testapp = webtest.TestApp(app)
+    super().setUp()
+    self.testapp = webtest.TestApp(flask_app)
 
   def testPost_UsesUnescapedStoryName(self):
     t = graph_data.TestMetadata(id='M/B/S/foo', unescaped_story_name='foo:bar')
@@ -79,12 +92,8 @@ class PinpointNewPrefillRequestHandlerTest(testing_common.TestCase):
 class PinpointNewPerfTryRequestHandlerTest(testing_common.TestCase):
 
   def setUp(self):
-    super(PinpointNewPerfTryRequestHandlerTest, self).setUp()
-
-    app = webapp2.WSGIApplication([
-        (r'/pinpoint/new', pinpoint_request.PinpointNewPerfTryRequestHandler)
-    ])
-    self.testapp = webtest.TestApp(app)
+    super().setUp()
+    self.testapp = webtest.TestApp(flask_app)
 
     self.SetCurrentUser('foo@chromium.org')
 
@@ -100,7 +109,7 @@ class PinpointNewPerfTryRequestHandlerTest(testing_common.TestCase):
   @mock.patch.object(utils, 'IsValidSheriffUser',
                      mock.MagicMock(return_value=False))
   def testPost_NotSheriff(self):
-    response = self.testapp.post('/pinpoint/new')
+    response = self.testapp.post('/pinpoint/new/perf_try')
     self.assertEqual({u'error': u'User "foo@chromium.org" not authorized.'},
                      json.loads(response.body))
 
@@ -109,7 +118,7 @@ class PinpointNewPerfTryRequestHandlerTest(testing_common.TestCase):
   def testPost_NoStoryFilter(self):
     params = GenerateTryRequestParams(
         {'test_path': 'ChromiumPerf/android-webview-nexus5x/system_health/foo'})
-    response = self.testapp.post('/pinpoint/new', params=params)
+    response = self.testapp.post('/pinpoint/new/perf_try', params=params)
     self.assertEqual({u'error': u'Story is required.'},
                      json.loads(response.body))
 
@@ -122,7 +131,7 @@ class PinpointNewPerfTryRequestHandlerTest(testing_common.TestCase):
     mock_pinpoint.return_value = {'foo': 'bar'}
     self.SetCurrentUser('foo@chromium.org')
     params = {'a': 'b', 'c': 'd'}
-    response = self.testapp.post('/pinpoint/new', params)
+    response = self.testapp.post('/pinpoint/new/perf_try', params)
 
     expected_args = mock.call({'test': 'result'})
     self.assertEqual([expected_args], mock_pinpoint.call_args_list)
@@ -298,12 +307,8 @@ class PinpointNewPerfTryRequestHandlerTest(testing_common.TestCase):
 class PinpointNewBisectRequestHandlerTest(testing_common.TestCase):
 
   def setUp(self):
-    super(PinpointNewBisectRequestHandlerTest, self).setUp()
-
-    app = webapp2.WSGIApplication([
-        (r'/pinpoint/new', pinpoint_request.PinpointNewBisectRequestHandler)
-    ])
-    self.testapp = webtest.TestApp(app)
+    super().setUp()
+    self.testapp = webtest.TestApp(flask_app)
 
     self.SetCurrentUser('foo@chromium.org')
 
@@ -319,7 +324,7 @@ class PinpointNewBisectRequestHandlerTest(testing_common.TestCase):
   @mock.patch.object(utils, 'IsValidSheriffUser',
                      mock.MagicMock(return_value=False))
   def testPost_NotSheriff(self):
-    response = self.testapp.post('/pinpoint/new')
+    response = self.testapp.post('/pinpoint/new/bisect')
     self.assertEqual({u'error': u'User "foo@chromium.org" not authorized.'},
                      json.loads(response.body))
 
@@ -332,7 +337,7 @@ class PinpointNewBisectRequestHandlerTest(testing_common.TestCase):
     mock_pinpoint.return_value = {'error': 'something'}
     self.SetCurrentUser('foo@chromium.org')
     params = {'a': 'b', 'c': 'd'}
-    response = self.testapp.post('/pinpoint/new', params)
+    response = self.testapp.post('/pinpoint/new/bisect', params)
 
     expected_args = mock.call({'test': 'result'})
     self.assertEqual([expected_args], mock_pinpoint.call_args_list)
@@ -347,7 +352,7 @@ class PinpointNewBisectRequestHandlerTest(testing_common.TestCase):
     mock_pinpoint.return_value = {'foo': 'bar'}
     self.SetCurrentUser('foo@chromium.org')
     params = {'a': 'b', 'c': 'd'}
-    response = self.testapp.post('/pinpoint/new', params)
+    response = self.testapp.post('/pinpoint/new/bisect', params)
 
     expected_args = mock.call({'test': 'result'})
     self.assertEqual([expected_args], mock_pinpoint.call_args_list)
@@ -375,11 +380,16 @@ class PinpointNewBisectRequestHandlerTest(testing_common.TestCase):
     anomaly_entity.put()
 
     params = {
-        'a': 'b',
-        'c': 'd',
-        'alerts': json.dumps([anomaly_entity.key.urlsafe()])
+        'a':
+            'b',
+        'c':
+            'd',
+        'alerts':
+            json.dumps(
+                utils.ConvertBytesBeforeJsonDumps(
+                    [anomaly_entity.key.urlsafe()]))
     }
-    response = self.testapp.post('/pinpoint/new', params)
+    response = self.testapp.post('/pinpoint/new/bisect', params)
 
     expected_args = mock.call({'test': 'result'})
     self.assertEqual([expected_args], mock_pinpoint.call_args_list)
@@ -401,11 +411,16 @@ class PinpointNewBisectRequestHandlerTest(testing_common.TestCase):
     anomaly_entity.put()
 
     params = {
-        'a': 'b',
-        'c': 'd',
-        'alerts': json.dumps([anomaly_entity.key.urlsafe()])
+        'a':
+            'b',
+        'c':
+            'd',
+        'alerts':
+            json.dumps(
+                utils.ConvertBytesBeforeJsonDumps(
+                    [anomaly_entity.key.urlsafe()]))
     }
-    response = self.testapp.post('/pinpoint/new', params)
+    response = self.testapp.post('/pinpoint/new/bisect', params)
 
     expected_args = mock.call({'test': 'result'})
     self.assertEqual([expected_args], mock_pinpoint.call_args_list)
@@ -429,15 +444,21 @@ class PinpointNewBisectRequestHandlerTest(testing_common.TestCase):
     anomaly_entity.put()
 
     params = GenerateBisectRequestParams({
-        'test_path': 'ChromiumPerf/mac/cc_perftests/foo',
-        'story_filter': 'required',
-        'alerts': json.dumps([anomaly_entity.key.urlsafe()])
+        'test_path':
+            'ChromiumPerf/mac/cc_perftests/foo',
+        'story_filter':
+            'required',
+        'alerts':
+            json.dumps(
+                utils.ConvertBytesBeforeJsonDumps(
+                    [anomaly_entity.key.urlsafe()]))
     })
     results = pinpoint_request.PinpointParamsFromBisectParams(params)
 
     self.assertEqual(9, results['comparison_magnitude'])
-    self.assertEqual(anomaly_entity.key.urlsafe(),
-                     json.loads(results['tags'])['alert'])
+    self.assertEqual(
+        six.ensure_str(anomaly_entity.key.urlsafe()),
+        json.loads(results['tags'])['alert'])
 
   @mock.patch.object(utils, 'IsValidSheriffUser',
                      mock.MagicMock(return_value=True))
@@ -761,8 +782,7 @@ class PinpointNewBisectRequestHandlerTest(testing_common.TestCase):
 class PinpointNewBisectComparisonMagnitude(testing_common.TestCase):
 
   def setUp(self):
-    super(PinpointNewBisectComparisonMagnitude, self).setUp()
-
+    super().setUp()
     self.SetCurrentUser('foo@chromium.org')
 
     namespaced_stored_object.Set('repositories', {
@@ -798,12 +818,14 @@ class PinpointNewBisectComparisonMagnitude(testing_common.TestCase):
 
     rows = dict(
         itertools.chain(
-            zip(
-                itertools.islice(itertools.count(1000, 2), 50),
-                itertools.repeat({'value': 0.1})),
-            zip(
-                itertools.islice(itertools.count(1101, 2), 50),
-                itertools.repeat({'value': 0.5}))))
+            list(
+                zip(
+                    itertools.islice(itertools.count(1000, 2), 50),
+                    itertools.repeat({'value': 0.1}))),
+            list(
+                zip(
+                    itertools.islice(itertools.count(1101, 2), 50),
+                    itertools.repeat({'value': 0.5})))))
 
     testing_common.AddRows(params['test_path'], rows)
     results = pinpoint_request.PinpointParamsFromBisectParams(params)
@@ -820,8 +842,7 @@ class PinpointNewBisectComparisonMagnitude(testing_common.TestCase):
     def _MockCommit(git_sha):
       if git_sha == 'abc':
         return {'number': 1050}
-      else:
-        return {'number': 1150}
+      return {'number': 1150}
 
     mock_commit.side_effect = _MockCommit
     testing_common.AddTests(['ChromiumPerf'], ['Android Nexus5X WebView Perf'],
@@ -843,12 +864,14 @@ class PinpointNewBisectComparisonMagnitude(testing_common.TestCase):
 
     rows = dict(
         itertools.chain(
-            zip(
-                itertools.islice(itertools.count(1000, 2), 50),
-                itertools.repeat({'value': 0.1})),
-            zip(
-                itertools.islice(itertools.count(1101, 2), 50),
-                itertools.repeat({'value': 0.5}))))
+            list(
+                zip(
+                    itertools.islice(itertools.count(1000, 2), 50),
+                    itertools.repeat({'value': 0.1}))),
+            list(
+                zip(
+                    itertools.islice(itertools.count(1101, 2), 50),
+                    itertools.repeat({'value': 0.5})))))
 
     testing_common.AddRows(params['test_path'], rows)
     results = pinpoint_request.PinpointParamsFromBisectParams(params)
@@ -911,14 +934,16 @@ class PinpointNewBisectComparisonMagnitude(testing_common.TestCase):
 
     rows = dict(
         itertools.chain(
-            zip(
-                itertools.islice(itertools.count(1000, 2), 75),
-                itertools.repeat({'value': -100.0})), [(1050, {
-                    'value': 0.1
-                })],
-            zip(
-                itertools.islice(itertools.count(1101, 2), 50),
-                itertools.repeat({'value': 0.5}))))
+            list(
+                zip(
+                    itertools.islice(itertools.count(1000, 2), 75),
+                    itertools.repeat({'value': -100.0}))), [(1050, {
+                        'value': 0.1
+                    })],
+            list(
+                zip(
+                    itertools.islice(itertools.count(1101, 2), 50),
+                    itertools.repeat({'value': 0.5})))))
 
     testing_common.AddRows(params['test_path'], rows)
     results = pinpoint_request.PinpointParamsFromBisectParams(params)

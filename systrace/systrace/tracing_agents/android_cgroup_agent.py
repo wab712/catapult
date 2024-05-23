@@ -42,7 +42,7 @@ def parse_proc_cgroups(cgroups, subsys):
 
 class AndroidCgroupAgent(tracing_agents.TracingAgent):
   def __init__(self):
-    super(AndroidCgroupAgent, self).__init__()
+    super().__init__()
     self._config = None
     self._device_utils = None
     self._trace_data = ""

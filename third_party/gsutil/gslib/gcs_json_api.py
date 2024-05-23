@@ -41,6 +41,7 @@ from boto import config
 import httplib2
 import oauth2client
 
+from gslib import context_config
 from gslib.cloud_api import AccessDeniedException
 from gslib.cloud_api import ArgumentException
 from gslib.cloud_api import BadRequestException
@@ -56,6 +57,7 @@ from gslib.cloud_api import ResumableUploadAbortException
 from gslib.cloud_api import ResumableUploadException
 from gslib.cloud_api import ResumableUploadStartOverException
 from gslib.cloud_api import ServiceException
+from gslib.exception import CommandException
 from gslib.gcs_json_credentials import SetUpJsonCredentialsAndCache
 from gslib.gcs_json_media import BytesTransferredContainer
 from gslib.gcs_json_media import DownloadCallbackConnectionClassFactory
@@ -64,6 +66,7 @@ from gslib.gcs_json_media import HttpWithNoRetries
 from gslib.gcs_json_media import UploadCallbackConnectionClassFactory
 from gslib.gcs_json_media import WrapDownloadHttpRequest
 from gslib.gcs_json_media import WrapUploadHttpRequest
+from gslib.impersonation_credentials import ImpersonationCredentials
 from gslib.no_op_credentials import NoOpCredentials
 from gslib.progress_callback import ProgressCallbackWithTimeout
 from gslib.project_id import PopulateProjectId
@@ -94,6 +97,7 @@ from gslib.utils.encryption_helper import CryptoKeyWrapperFromKey
 from gslib.utils.encryption_helper import FindMatchingCSEKInBotoConfig
 from gslib.utils.metadata_util import AddAcceptEncodingGzipIfNeeded
 from gslib.utils.retry_util import LogAndHandleRetries
+from gslib.utils.signurl_helper import CreatePayload, GetFinalUrl
 from gslib.utils.text_util import GetPrintableExceptionString
 from gslib.utils.translation_helper import CreateBucketNotFoundException
 from gslib.utils.translation_helper import CreateNotFoundExceptionForObjectWrite
@@ -101,6 +105,7 @@ from gslib.utils.translation_helper import CreateObjectNotFoundException
 from gslib.utils.translation_helper import DEFAULT_CONTENT_TYPE
 from gslib.utils.translation_helper import PRIVATE_DEFAULT_OBJ_ACL
 from gslib.utils.translation_helper import REMOVE_CORS_CONFIG
+from oauth2client.service_account import ServiceAccountCredentials
 
 if six.PY3:
   long = int
@@ -154,6 +159,27 @@ _ACL_FIELDS_SET = set([
     'items/owner',
     'owner',
 ])
+_BUCKET_PREDEFINED_ACL_XML_TO_JSON_TRANSLATION = {
+    None: None,
+    'authenticated-read': 'authenticatedRead',
+    'private': 'private',
+    'project-private': 'projectPrivate',
+    'public-read': 'publicRead',
+    'public-read-write': 'publicReadWrite'
+}
+_OBJECT_PREDEFINED_ACL_XML_TO_JSON_TRANSLATION = {
+    None: None,
+    'authenticated-read': 'authenticatedRead',
+    'bucket-owner-read': 'bucketOwnerRead',
+    'bucket-owner-full-control': 'bucketOwnerFullControl',
+    'private': 'private',
+    'project-private': 'projectPrivate',
+    'public-read': 'publicRead'
+}
+FULL_PREDEFINED_ACL_XML_TO_JSON_TRANSLATION = _BUCKET_PREDEFINED_ACL_XML_TO_JSON_TRANSLATION.copy(
+)
+FULL_PREDEFINED_ACL_XML_TO_JSON_TRANSLATION.update(
+    _OBJECT_PREDEFINED_ACL_XML_TO_JSON_TRANSLATION)
 
 # Fields that may be encrypted.
 _ENCRYPTED_HASHES_SET = set(['crc32c', 'md5Hash'])
@@ -164,6 +190,9 @@ _SKIP_LISTING_OBJECT = 'skip'
 
 _INSUFFICIENT_OAUTH2_SCOPE_MESSAGE = (
     'Insufficient OAuth2 scope to perform this operation.')
+
+DEFAULT_HOST = 'storage.googleapis.com'
+MTLS_HOST = 'storage.mtls.googleapis.com'
 
 
 class GcsJsonApi(CloudApi):
@@ -176,6 +205,7 @@ class GcsJsonApi(CloudApi):
                provider=None,
                credentials=None,
                debug=0,
+               http_headers=None,
                trace_token=None,
                perf_trace_token=None,
                user_project=None):
@@ -189,6 +219,7 @@ class GcsJsonApi(CloudApi):
       credentials: Credentials to be used for interacting with Google Cloud
                    Storage.
       debug: Debug level for the API implementation (0..3).
+      http_headers (dict|None): Arbitrary headers to be included in every request.
       trace_token: Trace token to pass to the API implementation.
       perf_trace_token: Performance trace token to use when making API calls.
       user_project: Project to be billed for this request.
@@ -200,6 +231,7 @@ class GcsJsonApi(CloudApi):
                                      status_queue,
                                      provider='gs',
                                      debug=debug,
+                                     http_headers=http_headers,
                                      trace_token=trace_token,
                                      perf_trace_token=perf_trace_token,
                                      user_project=user_project)
@@ -224,7 +256,18 @@ class GcsJsonApi(CloudApi):
 
     self.http_base = 'https://'
     gs_json_host = config.get('Credentials', 'gs_json_host', None)
-    self.host_base = gs_json_host or 'storage.googleapis.com'
+    if (context_config.get_context_config() and
+        context_config.get_context_config().use_client_certificate):
+      if gs_json_host:
+        raise ArgumentException(
+            '"use_client_certificate" is enabled, which sets gsutil to use the'
+            ' host {}. However, a custom host was set using'
+            ' "gs_json_host": {}. Please set "use_client_certificate" to'
+            ' "False" or comment out the "gs_json_host" line in the Boto'
+            ' config.'.format(MTLS_HOST, gs_json_host))
+      self.host_base = MTLS_HOST
+    else:
+      self.host_base = gs_json_host or DEFAULT_HOST
 
     if not gs_json_host:
       gs_host = config.get('Credentials', 'gs_host', None)
@@ -262,11 +305,7 @@ class GcsJsonApi(CloudApi):
     if gs_json_host_header and gs_json_host:
       additional_http_headers['Host'] = gs_json_host_header
 
-    self._AddPerfTraceTokenToHeaders(additional_http_headers)
-
-    request_reason = os.environ.get(REQUEST_REASON_ENV_VAR)
-    if request_reason:
-      additional_http_headers[REQUEST_REASON_HEADER_KEY] = request_reason
+    self._UpdateHeaders(additional_http_headers)
 
     log_request = (debug >= 3)
     log_response = (debug >= 3)
@@ -289,6 +328,7 @@ class GcsJsonApi(CloudApi):
 
     self.api_client.retry_func = LogAndHandleRetries(
         status_queue=self.status_queue)
+    self.api_client.overwrite_transfer_urls_with_client_base = True
 
     if isinstance(self.credentials, NoOpCredentials):
       # This API key is not secret and is used to identify gsutil during
@@ -296,9 +336,29 @@ class GcsJsonApi(CloudApi):
       self.api_client.AddGlobalParam('key',
                                      'AIzaSyDnacJHrKma0048b13sh8cgxNUwulubmJM')
 
-  def _AddPerfTraceTokenToHeaders(self, headers):
+  def GetServiceAccountId(self):
+    """Returns the service account email id."""
+    if isinstance(self.credentials, ImpersonationCredentials):
+      return self.credentials.service_account_id
+    elif isinstance(self.credentials, ServiceAccountCredentials):
+      return self.credentials.service_account_email
+    else:
+      raise CommandException(
+          'Cannot get service account email id for the given '
+          'credential type.')
+
+  def _UpdateHeaders(self, headers):
+    if self.http_headers:
+      headers.update(self.http_headers)
+
+    # The following functional headers potentially overwrite
+    # arbitrary ones provided by -h.
     if self.perf_trace_token:
       headers['cookie'] = self.perf_trace_token
+
+    request_reason = os.environ.get(REQUEST_REASON_ENV_VAR)
+    if request_reason:
+      headers[REQUEST_REASON_HEADER_KEY] = request_reason
 
   def _GetNewDownloadHttp(self):
     return GetNewHttp(http_class=HttpWithDownloadStream)
@@ -306,6 +366,20 @@ class GcsJsonApi(CloudApi):
   def _GetNewUploadHttp(self):
     """Returns an upload-safe Http object (by disabling httplib2 retries)."""
     return GetNewHttp(http_class=HttpWithNoRetries)
+
+  def _GetSignedContent(self, string_to_sign):
+    """Returns the Signed Content."""
+    if isinstance(self.credentials, ImpersonationCredentials):
+      iam_cred_api = self.credentials.api
+      service_account_id = self.credentials.service_account_id
+      response = iam_cred_api.SignBlob(service_account_id, string_to_sign)
+      return response.keyId, response.signedBlob
+    elif isinstance(self.credentials, ServiceAccountCredentials):
+      return self.credentials.sign_blob(string_to_sign)
+    else:
+      raise CommandException(
+          'Authentication using a service account is required for signing '
+          'the content.')
 
   def _FieldsContainsAclField(self, fields=None):
     """Checks Returns true if ACL related values are in fields set.
@@ -403,6 +477,30 @@ class GcsJsonApi(CloudApi):
                                                   global_params=global_params)
     except TRANSLATABLE_APITOOLS_EXCEPTIONS as e:
       self._TranslateExceptionAndRaise(e, bucket_name=bucket_name)
+
+  def SignUrl(self, method, duration, path, generation, logger, region,
+              signed_headers, string_to_sign_debug):
+    """See CloudApi class for function doc strings."""
+    service_account_id = self.GetServiceAccountId()
+    string_to_sign, canonical_query_string = CreatePayload(
+        client_id=service_account_id,
+        method=method,
+        duration=duration,
+        path=path,
+        generation=generation,
+        logger=logger,
+        region=region,
+        signed_headers=signed_headers,
+        string_to_sign_debug=string_to_sign_debug)
+
+    if six.PY3:
+      string_to_sign = string_to_sign.encode(UTF8)
+
+    key_id, raw_signature = self._GetSignedContent(string_to_sign)
+    logger.debug('Key ID used to sign blob for service account "%s": "%s"' %
+                 (service_account_id, key_id))
+    return GetFinalUrl(raw_signature, signed_headers['host'], path,
+                       canonical_query_string)
 
   def GetBucket(self, bucket_name, provider=None, fields=None):
     """See CloudApi class for function doc strings."""
@@ -1105,7 +1203,8 @@ class GcsJsonApi(CloudApi):
           download_stream,
           serialization_data,
           self.api_client.http,
-          num_retries=self.num_retries)
+          num_retries=self.num_retries,
+          client=self.api_client)
     else:
       apitools_download = apitools_transfer.Download.FromStream(
           download_stream,
@@ -1276,7 +1375,7 @@ class GcsJsonApi(CloudApi):
     AddAcceptEncodingGzipIfNeeded(additional_headers,
                                   compressed_encoding=compressed_encoding)
 
-    self._AddPerfTraceTokenToHeaders(additional_headers)
+    self._UpdateHeaders(additional_headers)
     additional_headers.update(
         self._EncryptionHeadersFromTuple(decryption_tuple))
 
@@ -1323,6 +1422,16 @@ class GcsJsonApi(CloudApi):
       predefined_acl = (apitools_messages.StorageObjectsPatchRequest.
                         PredefinedAclValueValuesEnum(
                             self._ObjectCannedAclToPredefinedAcl(canned_acl)))
+
+    # Provide the ability to delete response headers from metadata.
+    if metadata.cacheControl == '':
+      apitools_include_fields.append('cacheControl')
+    if metadata.contentDisposition == '':
+      apitools_include_fields.append('contentDisposition')
+    if metadata.contentEncoding == '':
+      apitools_include_fields.append('contentEncoding')
+    if metadata.contentLanguage == '':
+      apitools_include_fields.append('contentLanguage')
 
     apitools_request = apitools_messages.StorageObjectsPatchRequest(
         bucket=bucket_name,
@@ -1405,7 +1514,7 @@ class GcsJsonApi(CloudApi):
     additional_headers = {
         'user-agent': self.api_client.user_agent,
     }
-    self._AddPerfTraceTokenToHeaders(additional_headers)
+    self._UpdateHeaders(additional_headers)
 
     try:
       content_type = None
@@ -1457,6 +1566,7 @@ class GcsJsonApi(CloudApi):
             'user-agent': self.api_client.user_agent,
         }
         additional_headers.update(encryption_headers)
+        self._UpdateHeaders(additional_headers)
 
         return self._PerformResumableUpload(
             upload_stream, self.authorized_upload_http, content_type, size,
@@ -1485,7 +1595,8 @@ class GcsJsonApi(CloudApi):
             serialization_data,
             self.api_client.http,
             num_retries=self.num_retries,
-            gzip_encoded=gzip_encoded)
+            gzip_encoded=gzip_encoded,
+            client=self.api_client)
         apitools_upload.chunksize = GetJsonResumableChunkSize()
         apitools_upload.bytes_http = authorized_upload_http
       else:
@@ -1871,6 +1982,11 @@ class GcsJsonApi(CloudApi):
     encryption_headers = self._EncryptionHeadersFromTuple(
         crypto_tuple=encryption_tuple)
 
+    kmsKeyName = None
+    if encryption_tuple:
+      if encryption_tuple.crypto_type == CryptoKeyType.CMEK:
+        kmsKeyName = encryption_tuple.crypto_key
+
     with self._ApitoolsRequestHeaders(encryption_headers):
       apitools_request = apitools_messages.StorageObjectsComposeRequest(
           composeRequest=src_objs_compose_request,
@@ -1878,7 +1994,8 @@ class GcsJsonApi(CloudApi):
           destinationObject=dst_obj_name,
           ifGenerationMatch=preconditions.gen_match,
           ifMetagenerationMatch=preconditions.meta_gen_match,
-          userProject=self.user_project)
+          userProject=self.user_project,
+          kmsKeyName=kmsKeyName)
       try:
         return self.api_client.objects.Compose(apitools_request,
                                                global_params=global_params)
@@ -2087,17 +2204,8 @@ class GcsJsonApi(CloudApi):
       corresponds to a flavor of *PredefinedAclValueValuesEnum and can be
       used as input to apitools requests that affect bucket access controls.
     """
-    # XML : JSON
-    translation_dict = {
-        None: None,
-        'authenticated-read': 'authenticatedRead',
-        'private': 'private',
-        'project-private': 'projectPrivate',
-        'public-read': 'publicRead',
-        'public-read-write': 'publicReadWrite'
-    }
-    if canned_acl_string in translation_dict:
-      return translation_dict[canned_acl_string]
+    if canned_acl_string in _BUCKET_PREDEFINED_ACL_XML_TO_JSON_TRANSLATION:
+      return _BUCKET_PREDEFINED_ACL_XML_TO_JSON_TRANSLATION[canned_acl_string]
     raise ArgumentException('Invalid canned ACL %s' % canned_acl_string)
 
   def _ObjectCannedAclToPredefinedAcl(self, canned_acl_string):
@@ -2111,18 +2219,8 @@ class GcsJsonApi(CloudApi):
       corresponds to a flavor of *PredefinedAclValueValuesEnum and can be
       used as input to apitools requests that affect object access controls.
     """
-    # XML : JSON
-    translation_dict = {
-        None: None,
-        'authenticated-read': 'authenticatedRead',
-        'bucket-owner-read': 'bucketOwnerRead',
-        'bucket-owner-full-control': 'bucketOwnerFullControl',
-        'private': 'private',
-        'project-private': 'projectPrivate',
-        'public-read': 'publicRead'
-    }
-    if canned_acl_string in translation_dict:
-      return translation_dict[canned_acl_string]
+    if canned_acl_string in _OBJECT_PREDEFINED_ACL_XML_TO_JSON_TRANSLATION:
+      return _OBJECT_PREDEFINED_ACL_XML_TO_JSON_TRANSLATION[canned_acl_string]
     raise ArgumentException('Invalid canned ACL %s' % canned_acl_string)
 
   def _ValidateHttpAccessTokenRefreshError(self, e):
@@ -2213,7 +2311,9 @@ class GcsJsonApi(CloudApi):
         return ResumableUploadAbortException(message or 'Bad Request',
                                              status=e.status_code)
     if isinstance(e, apitools_exceptions.StreamExhausted):
-      return ResumableUploadAbortException(e.message)
+      return ResumableUploadAbortException(
+          '%s; if this issue persists, try deleting the tracker files present'
+          ' under ~/.gsutil/tracker-files/' % str(e))
     if isinstance(e, apitools_exceptions.TransferError):
       if ('Aborting transfer' in str(e) or
           'Not enough bytes in stream' in str(e)):
@@ -2323,11 +2423,15 @@ class GcsJsonApi(CloudApi):
         return NotFoundException(message or e.message, status=e.status_code)
 
       elif e.status_code == 409 and bucket_name:
-        if 'The bucket you tried to delete was not empty.' in str(e):
+        if 'The bucket you tried to delete is not empty.' in str(e):
           return NotEmptyException('BucketNotEmpty (%s)' % bucket_name,
                                    status=e.status_code)
-        return ServiceException('Bucket %s already exists.' % bucket_name,
-                                status=e.status_code)
+        return ServiceException(
+            'A Cloud Storage bucket named \'%s\' already exists. Try another '
+            'name. Bucket names must be globally unique across all Google Cloud '
+            'projects, including those outside of your '
+            'organization.' % bucket_name,
+            status=e.status_code)
       elif e.status_code == 412:
         return PreconditionException(message, status=e.status_code)
       return ServiceException(message, status=e.status_code)

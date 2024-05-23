@@ -5,6 +5,7 @@
 from __future__ import print_function
 from __future__ import absolute_import
 import logging
+import posixpath
 import shutil
 import time
 import six.moves._thread  # pylint: disable=import-error
@@ -13,6 +14,7 @@ import py_utils
 from py_utils import exc_util
 
 from telemetry import decorators
+from telemetry.core import debug_data
 from telemetry.internal.backends.chrome import chrome_browser_backend
 from telemetry.internal.backends.chrome import minidump_finder
 
@@ -39,7 +41,7 @@ class LacrosBrowserBackend(chrome_browser_backend.ChromeBrowserBackend):
           be determined.
     """
     assert browser_options.IsCrosBrowserOptions()
-    super(LacrosBrowserBackend, self).__init__(
+    super().__init__(
         cros_platform_backend,
         browser_options=browser_options,
         browser_directory=browser_directory,
@@ -82,7 +84,9 @@ class LacrosBrowserBackend(chrome_browser_backend.ChromeBrowserBackend):
     return devtools_port, browser_target
 
   def _FindUIDevtoolsPort(self):
-    devtools_file_path = '/usr/local/lacros-chrome/user_data/UIDevToolsActivePort'
+    devtools_file_path = posixpath.join(
+        '/', 'usr', 'local', 'lacros-chrome', 'user_data',
+        'UIDevToolsActivePort')
     # GetFileContents may raise IOError or OSError, the caller will retry.
     lines = self._cri.GetFileContents(devtools_file_path).splitlines()
     if not lines:
@@ -106,8 +110,8 @@ class LacrosBrowserBackend(chrome_browser_backend.ChromeBrowserBackend):
         startup_args[i] = new_arg
 
   def _LaunchLacrosChromeHelper(self, startup_args):
-    self._cri.RunCmdOnDevice(['cp', '../usr/local/lacros-chrome/chrome',
-                              '../usr/local/lacros-chrome/lacros-chrome'])
+    self._cri.RunCmdOnDevice(['cp', '/usr/local/lacros-chrome/chrome',
+                              '/usr/local/lacros-chrome/lacros-chrome'])
 
     # Some args need escaping, etc.
     self._ReformatArg(startup_args, 'enable-features')
@@ -117,6 +121,8 @@ class LacrosBrowserBackend(chrome_browser_backend.ChromeBrowserBackend):
     self._ReformatArg(startup_args, 'proxy-bypass-list')
     self._ReformatArg(startup_args, 'user-agent')
 
+    logging.info('Starting Chrome w/ Args: %s', startup_args)
+
     def _Launch():
       # This will block until the launched browser is closed.
       self._RunCommandAndLog(
@@ -125,7 +131,7 @@ class LacrosBrowserBackend(chrome_browser_backend.ChromeBrowserBackend):
            'python',
            '/usr/local/bin/mojo_connection_lacros_launcher.py',
            '-s', '/tmp/lacros.sock',
-           './../usr/local/lacros-chrome/lacros-chrome',
+           '/usr/local/lacros-chrome/lacros-chrome',
            '--ozone-platform=wayland',
            '--user-data-dir=/usr/local/lacros-chrome/user_data',
            '--enable-gpu-rasterization',
@@ -133,7 +139,11 @@ class LacrosBrowserBackend(chrome_browser_backend.ChromeBrowserBackend):
            '--lang=en-US',
            '--breakpad-dump-location=/usr/local/lacros-chrome/',
            '--no-sandbox',
-           '--trace-smb-size=32768'] + startup_args)
+           '--trace-smb-size=32768',
+           # Add LLVM profile output arg regardless of whether it's used.
+           # For PGO enabled builds, profiles are written to /tmp/profraw
+           # on the device. See crrev/c/4358910 for definition on arg.
+           '--llvm-profile-file=/tmp/default-%2m.profraw'] + startup_args)
       # This will only exist if launch was successful.
       return self._IsDevtoolsUp()
 
@@ -162,6 +172,13 @@ class LacrosBrowserBackend(chrome_browser_backend.ChromeBrowserBackend):
         self.browser.platform.GetOSName(), self.browser.platform.GetArchName())
 
     self.LaunchLacrosChrome(startup_args)
+    if not self._is_browser_running:
+      raise EnvironmentError('Unable to launch Lacros. If this is a local '
+       'run, did you install Lacros via deploy_chrome? If not, build and '
+       'deploy Lacros by following the instructions at '
+       'https://docs.google.com/document/d/1gkc_df4pv0OdVqRTz49kTkSsIybTAU_b'
+       'KfjFSWNcqnk/edit#bookmark=kix.edfe7j8hizjs '
+       '(Googlers only).')
     self.BindDevToolsClient()
 
   def Background(self):
@@ -169,7 +186,7 @@ class LacrosBrowserBackend(chrome_browser_backend.ChromeBrowserBackend):
 
   @exc_util.BestEffort
   def Close(self):
-    super(LacrosBrowserBackend, self).Close()
+    super().Close()
 
     if self._tmp_minidump_dir:
       shutil.rmtree(self._tmp_minidump_dir, ignore_errors=True)
@@ -195,6 +212,11 @@ class LacrosBrowserBackend(chrome_browser_backend.ChromeBrowserBackend):
   def SymbolizeMinidump(self, minidump_path):
     return self._cros_browser_backend.SymbolizeMinidump(minidump_path)
 
+  def _GetBrowserExecutablePath(self):
+    # pylint: disable=protected-access
+    return self._cros_browser_backend._GetBrowserExecutablePath()
+    # pylint: enable=protected-access
+
   def CollectDebugData(self, log_level):
     """Collects various information that may be useful for debugging.
 
@@ -206,7 +228,7 @@ class LacrosBrowserBackend(chrome_browser_backend.ChromeBrowserBackend):
       A debug_data.DebugData object containing the collected data.
     """
     # TODO(crbug.com/1148528): Pull Lacros data.
-    self._cros_browser_backend.CollectDebugData(log_level)
+    return debug_data.DebugData()
 
   @property
   def screenshot_timeout(self):
@@ -219,11 +241,17 @@ class LacrosBrowserBackend(chrome_browser_backend.ChromeBrowserBackend):
   def supports_overview_mode(self): # pylint: disable=invalid-name
     return True
 
+  @property
+  def devtools_window_manager_backend(self):
+    # pylint: disable=protected-access
+    return self._cros_browser_backend._devtools_client.window_manager_backend
+    # pylint: enable=protected-access
+
   def EnterOverviewMode(self, timeout):
-    self._cros_browser_backend._devtools_client.window_manager_backend.EnterOverviewMode(timeout)
+    self.devtools_window_manager_backend.EnterOverviewMode(timeout)
 
   def ExitOverviewMode(self, timeout):
-    self._cros_browser_backend._devtools_client.window_manager_backend.ExitOverviewMode(timeout)
+    self.devtools_window_manager_backend.ExitOverviewMode(timeout)
 
   @property
   @decorators.Cache

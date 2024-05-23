@@ -12,7 +12,7 @@ from telemetry import decorators
 from telemetry.internal.browser import possible_browser
 
 
-class FakeTest(object):
+class FakeTest():
 
   def SetEnabledStrings(self, enabled_strings):
     enabled_attr_name = decorators.EnabledAttributeName(self)
@@ -28,7 +28,7 @@ class TestDisableDecorators(unittest.TestCase):
 
   def testCannotDisableClasses(self):
 
-    class Ford(object):
+    class Ford():
       pass
 
     with self.assertRaises(TypeError):
@@ -36,16 +36,16 @@ class TestDisableDecorators(unittest.TestCase):
 
   def testDisabledStringOnMethod(self):
 
-    class Ford(object):
+    class Ford():
 
       @decorators.Disabled('windshield')
       def Drive(self):
         pass
 
-    self.assertEquals({'windshield'},
-                      decorators.GetDisabledAttributes(Ford().Drive))
+    self.assertEqual({'windshield'},
+                     decorators.GetDisabledAttributes(Ford().Drive))
 
-    class Honda(object):
+    class Honda():
 
       @decorators.Disabled('windows', 'Drive')
       @decorators.Disabled('wheel')
@@ -53,10 +53,10 @@ class TestDisableDecorators(unittest.TestCase):
       def Drive(self):
         pass
 
-    self.assertEquals({'wheel', 'Drive', 'windows'},
-                      decorators.GetDisabledAttributes(Honda().Drive))
-    self.assertEquals({'windshield'},
-                      decorators.GetDisabledAttributes(Ford().Drive))
+    self.assertEqual({'wheel', 'Drive', 'windows'},
+                     decorators.GetDisabledAttributes(Honda().Drive))
+    self.assertEqual({'windshield'},
+                     decorators.GetDisabledAttributes(Ford().Drive))
 
     class Accord(Honda):
 
@@ -66,12 +66,12 @@ class TestDisableDecorators(unittest.TestCase):
     class Explorer(Ford):
       pass
 
-    self.assertEquals({'wheel', 'Drive', 'windows'},
-                      decorators.GetDisabledAttributes(Honda().Drive))
-    self.assertEquals({'windshield'},
-                      decorators.GetDisabledAttributes(Ford().Drive))
-    self.assertEquals({'windshield'},
-                      decorators.GetDisabledAttributes(Explorer().Drive))
+    self.assertEqual({'wheel', 'Drive', 'windows'},
+                     decorators.GetDisabledAttributes(Honda().Drive))
+    self.assertEqual({'windshield'},
+                     decorators.GetDisabledAttributes(Ford().Drive))
+    self.assertEqual({'windshield'},
+                     decorators.GetDisabledAttributes(Explorer().Drive))
     self.assertFalse(decorators.GetDisabledAttributes(Accord().Drive))
 
 
@@ -79,7 +79,7 @@ class TestEnableDecorators(unittest.TestCase):
 
   def testCannotEnableClasses(self):
 
-    class Ford(object):
+    class Ford():
       pass
 
     with self.assertRaises(TypeError):
@@ -87,16 +87,16 @@ class TestEnableDecorators(unittest.TestCase):
 
   def testEnabledStringOnMethod(self):
 
-    class Ford(object):
+    class Ford():
 
       @decorators.Enabled('windshield')
       def Drive(self):
         pass
 
-    self.assertEquals({'windshield'},
-                      decorators.GetEnabledAttributes(Ford().Drive))
+    self.assertEqual({'windshield'},
+                     decorators.GetEnabledAttributes(Ford().Drive))
 
-    class Honda(object):
+    class Honda():
 
       @decorators.Enabled('windows', 'Drive')
       @decorators.Enabled('wheel', 'Drive')
@@ -104,8 +104,8 @@ class TestEnableDecorators(unittest.TestCase):
       def Drive(self):
         pass
 
-    self.assertEquals({'wheel', 'Drive', 'windows'},
-                      decorators.GetEnabledAttributes(Honda().Drive))
+    self.assertEqual({'wheel', 'Drive', 'windows'},
+                     decorators.GetEnabledAttributes(Honda().Drive))
 
     class Accord(Honda):
 
@@ -115,12 +115,12 @@ class TestEnableDecorators(unittest.TestCase):
     class Explorer(Ford):
       pass
 
-    self.assertEquals({'wheel', 'Drive', 'windows'},
-                      decorators.GetEnabledAttributes(Honda().Drive))
-    self.assertEquals({'windshield'},
-                      decorators.GetEnabledAttributes(Ford().Drive))
-    self.assertEquals({'windshield'},
-                      decorators.GetEnabledAttributes(Explorer().Drive))
+    self.assertEqual({'wheel', 'Drive', 'windows'},
+                     decorators.GetEnabledAttributes(Honda().Drive))
+    self.assertEqual({'windshield'},
+                     decorators.GetEnabledAttributes(Ford().Drive))
+    self.assertEqual({'windshield'},
+                     decorators.GetEnabledAttributes(Explorer().Drive))
     self.assertFalse(decorators.GetEnabledAttributes(Accord().Drive))
 
 
@@ -130,40 +130,40 @@ class TestInfoDecorators(unittest.TestCase):
 
     @decorators.Info(emails=['owner@chromium.org'],
                      documentation_url='http://foo.com')
-    class Ford(object):
+    class Ford():
       pass
 
-    self.assertEquals(['owner@chromium.org'], decorators.GetEmails(Ford))
+    self.assertEqual(['owner@chromium.org'], decorators.GetEmails(Ford))
 
     @decorators.Info(emails=['owner2@chromium.org'])
     @decorators.Info(component='component',
                      documentation_url='http://bar.com',
                      info_blurb='Has CVT Transmission')
-    class Honda(object):
+    class Honda():
       pass
 
 
-    self.assertEquals(['owner2@chromium.org'], decorators.GetEmails(Honda))
-    self.assertEquals('http://bar.com', decorators.GetDocumentationLink(Honda))
-    self.assertEquals('component', decorators.GetComponent(Honda))
-    self.assertEquals(['owner@chromium.org'], decorators.GetEmails(Ford))
-    self.assertEquals('http://foo.com', decorators.GetDocumentationLink(Ford))
-    self.assertEquals('Has CVT Transmission', decorators.GetInfoBlurb(Honda))
+    self.assertEqual(['owner2@chromium.org'], decorators.GetEmails(Honda))
+    self.assertEqual('http://bar.com', decorators.GetDocumentationLink(Honda))
+    self.assertEqual('component', decorators.GetComponent(Honda))
+    self.assertEqual(['owner@chromium.org'], decorators.GetEmails(Ford))
+    self.assertEqual('http://foo.com', decorators.GetDocumentationLink(Ford))
+    self.assertEqual('Has CVT Transmission', decorators.GetInfoBlurb(Honda))
 
 
   def testInfoStringOnSubClass(self):
 
     @decorators.Info(emails=['owner@chromium.org'], component='comp',
                      documentation_url='https://car.com')
-    class Car(object):
+    class Car():
       pass
 
     class Ford(Car):
       pass
 
-    self.assertEquals(['owner@chromium.org'], decorators.GetEmails(Car))
-    self.assertEquals('comp', decorators.GetComponent(Car))
-    self.assertEquals('https://car.com', decorators.GetDocumentationLink(Car))
+    self.assertEqual(['owner@chromium.org'], decorators.GetEmails(Car))
+    self.assertEqual('comp', decorators.GetComponent(Car))
+    self.assertEqual('https://car.com', decorators.GetDocumentationLink(Car))
     self.assertFalse(decorators.GetEmails(Ford))
     self.assertFalse(decorators.GetComponent(Ford))
     self.assertFalse(decorators.GetDocumentationLink(Ford))
@@ -175,7 +175,7 @@ class TestInfoDecorators(unittest.TestCase):
     with self.assertRaises(AssertionError):
       @decorators.Info(emails=['owner2@chromium.org'])
       @decorators.Info(emails=['owner@chromium.org'], component='comp')
-      class Car(object):
+      class Car():
         pass
 
 
@@ -365,7 +365,7 @@ class TestDeprecation(unittest.TestCase):
   @mock.patch('warnings.warn')
   def testMethodDeprecated(self, warn_mock):
 
-    class Bar(object):
+    class Bar():
 
       @decorators.Deprecated(2015, 12, 1, 'Testing only.')
       def Foo(self, x):
@@ -382,7 +382,7 @@ class TestDeprecation(unittest.TestCase):
   def testClassWithoutInitDefinedDeprecated(self, warn_mock):
 
     @decorators.Deprecated(2015, 12, 1)
-    class Bar(object):
+    class Bar():
 
       def Foo(self, x):
         return x
@@ -398,7 +398,7 @@ class TestDeprecation(unittest.TestCase):
   def testClassWithInitDefinedDeprecated(self, warn_mock):
 
     @decorators.Deprecated(2015, 12, 1)
-    class Bar(object):
+    class Bar():
 
       def __init__(self):
         pass
@@ -416,7 +416,7 @@ class TestDeprecation(unittest.TestCase):
   @mock.patch('warnings.warn')
   def testInheritedClassDeprecated(self, warn_mock):
 
-    class Ba(object):
+    class Ba():
       pass
 
     @decorators.Deprecated(2015, 12, 1)
@@ -437,10 +437,10 @@ class TestDeprecation(unittest.TestCase):
 
   def testReturnValue(self):
 
-    class Bar(object):
+    class Bar():
 
       @decorators.Deprecated(2015, 12, 1, 'Testing only.')
       def Foo(self, x):
         return x
 
-    self.assertEquals(5, Bar().Foo(5))
+    self.assertEqual(5, Bar().Foo(5))

@@ -6,11 +6,13 @@ from __future__ import print_function
 from __future__ import division
 from __future__ import absolute_import
 
+from flask import Flask
 import itertools
 import json
+import mock
 import unittest
 
-import webapp2
+import six
 import webtest
 
 from google.appengine.ext import ndb
@@ -24,15 +26,26 @@ from dashboard.models import anomaly
 from dashboard.models import bug_data
 from dashboard.models import page_state
 from dashboard.models.subscription import Subscription
+from dashboard.services import perf_issue_service_client
+
+flask_app = Flask(__name__)
+
+
+@flask_app.route('/group_report', methods=['GET'])
+def GroupReportGet():
+  return group_report.GroupReportGet()
+
+
+@flask_app.route('/group_report', methods=['POST'])
+def GroupReportPost():
+  return group_report.GroupReportPost()
 
 
 class GroupReportTest(testing_common.TestCase):
 
   def setUp(self):
-    super(GroupReportTest, self).setUp()
-    app = webapp2.WSGIApplication([('/group_report',
-                                    group_report.GroupReportHandler)])
-    self.testapp = webtest.TestApp(app)
+    super().setUp()
+    self.testapp = webtest.TestApp(flask_app)
 
   def _AddAnomalyEntities(self,
                           revision_ranges,
@@ -56,7 +69,7 @@ class GroupReportTest(testing_common.TestCase):
           subscriptions=subscriptions,
           median_before_anomaly=100,
           median_after_anomaly=200).put()
-      urlsafe_keys.append(anomaly_key.urlsafe())
+      urlsafe_keys.append(six.ensure_str(anomaly_key.urlsafe()))
       keys.append(anomaly_key)
     if group_id:
       alert_group.AlertGroup(
@@ -98,7 +111,7 @@ class GroupReportTest(testing_common.TestCase):
   def testGet(self):
     response = self.testapp.get('/group_report')
     self.assertEqual('text/html', response.content_type)
-    self.assertIn('Chrome Performance Dashboard', response.body)
+    self.assertIn(b'Chrome Performance Dashboard', response.body)
 
   def testPost_WithAnomalyKeys_ShowsSelectedAndOverlapping(self):
     subscriptions = [
@@ -142,7 +155,7 @@ class GroupReportTest(testing_common.TestCase):
     selected_keys = self._AddAnomalyEntities(selected_ranges, test_keys[0],
                                              [subscription])
 
-    json_keys = json.dumps(selected_keys)
+    json_keys = six.ensure_binary(json.dumps(selected_keys))
     state_id = short_uri.GenerateHash(','.join(selected_keys))
     page_state.PageState(id=state_id, value=json_keys).put()
 
@@ -159,9 +172,11 @@ class GroupReportTest(testing_common.TestCase):
 
   def testPost_WithKeyOfNonExistentAlert_ShowsError(self):
     key = ndb.Key('Anomaly', 123)
-    response = self.testapp.post('/group_report?keys=%s' % key.urlsafe())
+    response = self.testapp.post('/group_report?keys=%s' %
+                                 six.ensure_str(key.urlsafe()))
     error = self.GetJsonValue(response, 'error')
-    self.assertEqual('No Anomaly found for key %s.' % key.urlsafe(), error)
+    self.assertEqual(
+        'No Anomaly found for key %s.' % six.ensure_str(key.urlsafe()), error)
 
   def testPost_WithInvalidKeyParameter_ShowsError(self):
     response = self.testapp.post('/group_report?keys=foobar')
@@ -218,6 +233,8 @@ class GroupReportTest(testing_common.TestCase):
     error = self.GetJsonValue(response, 'error')
     self.assertEqual('Invalid bug ID "chromium:foo".', error)
 
+  @mock.patch.object(perf_issue_service_client, 'GetAnomaliesByAlertGroupID',
+                     mock.MagicMock(return_value=[1, 2, 3]))
   def testPost_WithGroupIdParameter(self):
     subscription = self._Subscription()
     test_keys = self._AddTests()

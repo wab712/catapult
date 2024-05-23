@@ -27,7 +27,7 @@ def AssertValidCloudStorageBucket(bucket):
     raise ValueError("Cloud storage privacy bucket %s is invalid" % bucket)
 
 
-class WprArchiveInfo(object):
+class WprArchiveInfo():
   def __init__(self, file_path, data, bucket):
     AssertValidCloudStorageBucket(bucket)
     self._file_path = file_path
@@ -44,6 +44,10 @@ class WprArchiveInfo(object):
         'version.')
 
     self._story_name_to_wpr_file = data['archives']
+
+  @property
+  def data(self):
+    return self._data
 
   @classmethod
   def FromFile(cls, file_path, bucket):
@@ -89,7 +93,8 @@ class WprArchiveInfo(object):
     def download_if_needed(path):
       try:
         cloud_storage.GetIfChanged(path, self._bucket)
-      except (cloud_storage.CredentialsError, cloud_storage.PermissionError):
+      except (cloud_storage.CredentialsError,
+              cloud_storage.CloudStoragePermissionError):
         if os.path.exists(path):
           # If the archive exists, assume the user recorded their own and warn
           # them that they do not have the proper credentials to download.
@@ -97,10 +102,7 @@ class WprArchiveInfo(object):
         else:
           logging.error("You either aren't authenticated or don't have "
                         "permission to use the archives for this page set."
-                        "\nYou may need to run gsutil config."
-                        "\nYou can find instructions for gsutil config at: "
-                        "http://www.chromium.org/developers/telemetry/"
-                        "upload_to_cloud_storage")
+                        "\nYou may need to run gcloud auth login.")
           raise
 
     try:
@@ -174,6 +176,15 @@ class WprArchiveInfo(object):
       except cloud_storage.CloudStorageError as e:
         logging.warning('Failed to upload wpr file %s to cloud storage. '
                         'Error:%s' % target_wpr_file_path, e)
+
+  def RemoveStory(self, story):
+    story_archives = self._data['archives']
+    if story not in story_archives:
+      logging.error("Story does not exist in archive!")
+      return
+
+    del story_archives[story]
+    self._WriteToFile()
 
   def _WriteToFile(self):
     """Writes the metadata into the file passed as constructor parameter."""

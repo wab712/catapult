@@ -7,7 +7,7 @@ import collections
 import logging
 
 
-class ForwarderFactory(object):
+class ForwarderFactory():
 
   def Create(self, local_port, remote_port, reverse=False):
     """Creates a forwarder to map a local (host) with a remote (device) port.
@@ -32,11 +32,14 @@ class ForwarderFactory(object):
     return '127.0.0.1'
 
 
-class Forwarder(object):
+class Forwarder():
 
   def __init__(self):
     self._local_port = None
     self._remote_port = None
+
+  def __del__(self):
+    self.Close()
 
   def _StartedForwarding(self, local_port, remote_port):
     assert not self.is_forwarding, 'forwarder has already started'

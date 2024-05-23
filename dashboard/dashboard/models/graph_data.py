@@ -58,7 +58,10 @@ from __future__ import print_function
 from __future__ import division
 from __future__ import absolute_import
 
+import datetime
+import json
 import logging
+import six
 
 from google.appengine.ext import ndb
 
@@ -67,6 +70,8 @@ from dashboard.common import utils
 from dashboard.models import anomaly
 from dashboard.models import anomaly_config
 from dashboard.models import internal_only_model
+
+from dateutil.relativedelta import relativedelta
 
 # Maximum level of nested tests.
 MAX_TEST_ANCESTORS = 10
@@ -105,14 +110,19 @@ class Bot(internal_only_model.InternalOnlyModel):
     try:
       internal_only = yield cls.GetInternalOnlyAsync(master, bot)
       raise ndb.Return(internal_only)
-    except AssertionError:
-      raise ndb.Return(True)
+    except AssertionError as e:
+      logging.warning(
+          'Failed to get internal_only for (master: %s, bot: %s). Error: %s.',
+          master, bot, e)
+      six.raise_from(ndb.Return(True), e)
 
   @staticmethod
   @ndb.tasklet
   def GetInternalOnlyAsync(master, bot):
     bot_entity = yield ndb.Key('Master', master, 'Bot', bot).get_async()
     if bot_entity is None:
+      logging.warning('Failed to find Bot Entity with master %s and bot %s.',
+                      master, bot)
       raise ndb.Return(True)
     raise ndb.Return(bot_entity.internal_only)
 
@@ -264,7 +274,7 @@ class TestMetadata(internal_only_model.CreateHookInternalOnlyModel):
     # Truncate the "description" property if necessary.
     description = kwargs.get('description') or ''
     kwargs['description'] = description[:_MAX_STRING_LENGTH]
-    super(TestMetadata, self).__init__(*args, **kwargs)
+    super().__init__(*args, **kwargs)
 
   @ndb.synctasklet
   def UpdateSheriff(self):
@@ -391,6 +401,16 @@ class Row(ndb.Expando):
   # The standard deviation at this point. Optional.
   error = ndb.FloatProperty(indexed=False)
 
+  # A *single* swarming device ID, or None. Never multiple.
+  swarming_bot_id = ndb.StringProperty(indexed=True)
+
+  @ndb.ComputedProperty
+  def expiry(self):  # pylint: disable=invalid-name
+    if self.timestamp:
+      return self.timestamp + relativedelta(years=3)
+
+    return datetime.datetime.utcnow() + relativedelta(years=3)
+
   @ndb.tasklet
   def UpdateParentAsync(self, **ctx_options):
     parent_test = yield utils.TestMetadataKey(
@@ -406,6 +426,23 @@ class Row(ndb.Expando):
       parent_test.has_rows = True
       yield parent_test.UpdateSheriffAsync()
       yield parent_test.put_async(**ctx_options)
+
+
+class MigrationJob(ndb.Model):
+  job_id = ndb.StringProperty()
+  entry_type = ndb.StringProperty()
+  entry_data = ndb.StringProperty()
+  status = ndb.StringProperty()
+  start_time = ndb.DateTimeProperty(auto_now_add=True)
+  end_time = ndb.DateTimeProperty(auto_now=True)
+
+  def GetEntryData(self, cls):
+    json_dict = json.loads(self.entry_data)
+    return cls(json_dict)
+
+  def SetEntryData(self, entry_data):
+    self.entry_data = json.dumps(entry_data,
+                                 default=lambda entry_data: entry_data.__dict__)
 
 
 def GetRowsForTestInRange(test_key, start_rev, end_rev):
@@ -427,12 +464,12 @@ def GetRowsForTestAroundRev(test_key, rev, num_points):
 
 
 def GetRowsForTestBeforeAfterRev(test_key, rev, num_rows_before,
-                                 num_rows_after):
+    num_rows_after):
   """Gets up to |num_points| Row entities for a test centered on a revision."""
   test_key = utils.OldStyleTestKey(test_key)
 
   query_up_to_rev = Row.query(Row.parent_test == test_key, Row.revision <= rev)
-  query_up_to_rev = query_up_to_rev.order(-Row.revision)
+  query_up_to_rev = query_up_to_rev.order(-Row.revision)  # pylint: disable=invalid-unary-operand-type
   rows_up_to_rev = list(
       reversed(query_up_to_rev.fetch(limit=num_rows_before, batch_size=100)))
 
@@ -447,6 +484,6 @@ def GetLatestRowsForTest(test_key, num_points, keys_only=False):
   """Gets the latest num_points Row entities for a test."""
   test_key = utils.OldStyleTestKey(test_key)
   query = Row.query(Row.parent_test == test_key)
-  query = query.order(-Row.revision)
+  query = query.order(-Row.revision)  # pylint: disable=invalid-unary-operand-type
 
   return query.fetch(limit=num_points, batch_size=100, keys_only=keys_only)

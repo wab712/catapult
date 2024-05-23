@@ -14,9 +14,12 @@ import math
 import os.path
 
 from dashboard import update_bug_with_results
+from dashboard import sheriff_config_client
+from dashboard.common import cloud_metric
 from dashboard.common import utils
-from dashboard.services import issue_tracker_service
 from dashboard.models import histogram
+from dashboard.models import anomaly
+from dashboard.services import perf_issue_service_client
 from dashboard.pinpoint.models import job_state
 from dashboard.pinpoint.models.change import commit as commit_module
 from dashboard.pinpoint.models.change import patch as patch_module
@@ -41,12 +44,14 @@ _LABEL_EXCLUSION_SETS = [
         'Pinpoint-Job-Failed',
         'Pinpoint-Job-Pending',
         'Pinpoint-Job-Cancelled',
+        'Culprit-Sandwich-Verification-Started',
     },
     {
         'Pinpoint-Culprit-Found',
         'Pinpoint-No-Repro',
         'Pinpoint-Multiple-Culprits',
         'Pinpoint-Multiple-MissingValues',
+        'Culprit-Verification-No-Repro',
     },
 ]
 
@@ -60,10 +65,7 @@ def ComputeLabelUpdates(labels):
         label in label_set for label_set in _LABEL_EXCLUSION_SETS)
     if found_in_sets > 1:
       raise ValueError(
-          'label "%s" is found in %s label sets',
-          label,
-          found_in_sets,
-      )
+          'label "%s" is found in %s label sets' % (label, found_in_sets),)
 
   for label_set in _LABEL_EXCLUSION_SETS:
     label_updates |= set('-' + l for l in label_set)
@@ -72,7 +74,7 @@ def ComputeLabelUpdates(labels):
   return list(label_updates)
 
 
-class JobUpdateBuilder(object):
+class JobUpdateBuilder:
   """Builder for job issue updates.
 
   The builder lets us collect the useful information for filing an update on an
@@ -105,7 +107,7 @@ class JobUpdateBuilder(object):
     return _BugUpdateInfo(comment_text, None, None, labels, None)
 
 
-class DifferencesFoundBugUpdateBuilder(object):
+class DifferencesFoundBugUpdateBuilder:
   """Builder for bug updates about differences found in a metric.
 
   Accumulate the found differences into this with AddDifference(), then call
@@ -130,51 +132,66 @@ class DifferencesFoundBugUpdateBuilder(object):
   def SetExaminedCount(self, examined_count):
     self._examined_count = examined_count
 
-  def AddDifference(self, change, values_a, values_b):
+  def AddDifference(self,
+                    change,
+                    values_a,
+                    values_b,
+                    kind=None,
+                    commit_dict=None):
     """Add a difference (a commit where the metric changed significantly).
 
     Args:
       change: a Change.
       values_a: (list) result values for the prior commit.
       values_b: (list) result values for this commit.
+      kind: commit kind.
+      commit_dict: commit dictionary.
     """
-    if change.patch:
-      kind = 'patch'
-      commit_dict = {
-          'server': change.patch.server,
-          'change': change.patch.change,
-          'revision': change.patch.revision,
-      }
-    else:
-      kind = 'commit'
-      commit_dict = {
-          'repository': change.last_commit.repository,
-          'git_hash': change.last_commit.git_hash,
-      }
+    if not kind and not commit_dict:
+      if change.patch:
+        kind = 'patch'
+        commit_dict = {
+            'server': change.patch.server,
+            'change': change.patch.change,
+            'revision': change.patch.revision,
+        }
+      else:
+        kind = 'commit'
+        commit_dict = {
+            'repository': change.last_commit.repository,
+            'git_hash': change.last_commit.git_hash,
+        }
 
     # Store just the commit repository + hash to ensure we don't attempt to
     # serialize too much data into datastore.  See https://crbug.com/1140309.
     self._differences.append(_Difference(kind, commit_dict, values_a, values_b))
     self._cached_ordered_diffs_by_delta = None
 
-  def BuildUpdate(self, tags, url):
+  def BuildUpdate(self, tags, url, improvement_dir, sandwiched=False):
     """Return _BugUpdateInfo for the differences."""
     if len(self._differences) == 0:
       raise ValueError("BuildUpdate called with 0 differences")
-    differences = self._OrderedDifferencesByDelta()
+    differences = self._OrderedDifferencesByDelta(improvement_dir)
     missing_values = self._DifferencesWithNoValues()
-    owner, cc_list, notify_why_text = self._PeopleToNotify()
+    owner, cc_list, notify_why_text = self._PeopleToNotify(improvement_dir)
     status = None
 
     # Here we're only going to consider the cases where we find differences
     # that have non-empty values, to consider whether we've found no, a single,
     # or multiple culprits.
     if differences:
-      labels = [
-          'Pinpoint-Culprit-Found'
-          if len(differences) == 1 else 'Pinpoint-Multiple-Culprits',
-          'Pinpoint-Job-Completed',
-      ]
+      if sandwiched:
+        labels = [
+            'Pinpoint-Culprit-Found'
+            if len(differences) == 1 else 'Pinpoint-Multiple-Culprits',
+            'Culprit-Verification-Completed',
+        ]
+      else:
+        labels = [
+            'Pinpoint-Culprit-Found'
+            if len(differences) == 1 else 'Pinpoint-Multiple-Culprits',
+            'Pinpoint-Job-Completed',
+        ]
       if missing_values:
         labels.append('Pinpoint-Multiple-MissingValues')
       labels = ComputeLabelUpdates(labels)
@@ -188,10 +205,18 @@ class DifferencesFoundBugUpdateBuilder(object):
           examined_count=self._examined_count,
           missing_values=missing_values,
       )
+      if tags and tags.get('auto_bisection') == 'true':
+        cloud_metric.PublishAutoTriagedIssue(
+            cloud_metric.AUTO_TRIAGE_CULPRIT_FOUND)
     elif missing_values:
       status = 'Assigned'
-      labels = ComputeLabelUpdates(
-          ['Pinpoint-Multiple-MissingValues', 'Pinpoint-Job-Completed'])
+      if sandwiched:
+        labels = ComputeLabelUpdates([
+            'Pinpoint-Multiple-MissingValues', 'Culprit-Verification-Completed'
+        ])
+      else:
+        labels = ComputeLabelUpdates(
+            ['Pinpoint-Multiple-MissingValues', 'Pinpoint-Job-Completed'])
       comment_text = _MISSING_VALUES_TMPL.render(
           missing_values=missing_values,
           metric=self._metric,
@@ -200,6 +225,15 @@ class DifferencesFoundBugUpdateBuilder(object):
 
     return _BugUpdateInfo(comment_text, owner, cc_list, labels, status)
 
+  def GetCommits(self):
+    commits = [
+        commit_module.Commit(**diff.commit_dict)
+        for diff in self._differences
+        if diff.commit_kind == 'commit'
+    ]
+    logging.debug('[GroupingQuality] %s commits are loaded', len(commits))
+    return commits
+
   def GenerateCommitCacheKey(self):
     commit_cache_key = None
     if len(self._differences) == 1:
@@ -207,7 +241,7 @@ class DifferencesFoundBugUpdateBuilder(object):
           self._differences[0].commit_info.get('git_hash'))
     return commit_cache_key
 
-  def _OrderedDifferencesByDelta(self):
+  def _OrderedDifferencesByDelta(self, improvement_dir):
     """Return the list of differences sorted by absolute change."""
     if self._cached_ordered_diffs_by_delta is not None:
       return self._cached_ordered_diffs_by_delta
@@ -215,10 +249,21 @@ class DifferencesFoundBugUpdateBuilder(object):
     diffs_with_deltas = [(diff.MeanDelta(), diff)
                          for diff in self._differences
                          if diff.values_a and diff.values_b]
-    ordered_diffs = [
-        diff for _, diff in sorted(
-            diffs_with_deltas, key=lambda i: abs(i[0]), reverse=True)
-    ]
+    if improvement_dir == anomaly.UP:
+      # improvement is positive, regression is negative
+      ordered_diffs = [
+          diff for _, diff in sorted(diffs_with_deltas, key=lambda i: i[0])
+      ]
+    elif improvement_dir == anomaly.DOWN:
+      ordered_diffs = [
+          diff for _, diff in sorted(
+              diffs_with_deltas, key=lambda i: i[0], reverse=True)
+      ]
+    else:
+      ordered_diffs = [
+          diff for _, diff in sorted(
+              diffs_with_deltas, key=lambda i: abs(i[0]), reverse=True)
+      ]
     self._cached_ordered_diffs_by_delta = ordered_diffs
     return ordered_diffs
 
@@ -233,7 +278,7 @@ class DifferencesFoundBugUpdateBuilder(object):
     ]
     return self._cached_commits_with_no_values
 
-  def _PeopleToNotify(self):
+  def _PeopleToNotify(self, improvement_dir):
     """Return the people to notify for these differences.
 
     This looks at the top commits (by absolute change), and returns a tuple of:
@@ -242,7 +287,8 @@ class DifferencesFoundBugUpdateBuilder(object):
       * why_text (str, text explaining why this owner was chosen)
     """
     ordered_commits = [
-        diff.commit_info for diff in self._OrderedDifferencesByDelta()
+        diff.commit_info
+        for diff in self._OrderedDifferencesByDelta(improvement_dir)
     ] + [diff.commit_info for diff in self._DifferencesWithNoValues()]
 
     # CC the folks in the top N commits.  N is scaled by the number of commits
@@ -266,7 +312,7 @@ class DifferencesFoundBugUpdateBuilder(object):
     return owner, cc_list, why_text
 
 
-class _Difference(object):
+class _Difference:
 
   # Define this as a class attribute so that accessing it never fails with
   # AttributeError, even if working with a serialized version of _Difference
@@ -340,25 +386,25 @@ class _BugUpdateInfo(
   """
 
 
-def _ComputePostMergeDetails(issue_tracker, commit_cache_key, cc_list):
+def _ComputePostMergeDetails(commit_cache_key, cc_list):
   merge_details = {}
   if commit_cache_key:
     merge_details = update_bug_with_results.GetMergeIssueDetails(
-        issue_tracker, commit_cache_key)
+        commit_cache_key)
     if merge_details['id']:
-      cc_list = []
+      cc_list = set()
   return merge_details, cc_list
 
 
-def _GetBugStatus(issue_tracker, bug_id, project='chromium'):
+def _GetBugData(bug_id, project='chromium'):
   if not bug_id:
-    return None, None
+    return None
 
-  issue_data = issue_tracker.GetIssue(bug_id, project=project)
+  issue_data = perf_issue_service_client.GetIssue(bug_id, project_name=project)
   if not issue_data:
-    return None, None
+    return None
 
-  return issue_data.get('owner'), issue_data.get('status')
+  return issue_data
 
 
 def _FormatDocumentationUrls(tags):
@@ -385,23 +431,67 @@ def _FormatDocumentationUrls(tags):
   return footer
 
 
-def UpdatePostAndMergeDeferred(bug_update_builder, bug_id, tags, url, project):
+def _ComputeAutobisectUpdate(tags):
+  if tags.get('auto_bisection') != 'true':
+    return None
+
+  test_key = tags.get('test_path')
+  if not test_key:
+    return None
+
+  client = sheriff_config_client.GetSheriffConfigClient()
+  matched_configs, _ = client.Match(test_key, check=True)
+
+  logging.debug('[DelayReporting] matched config: %s', matched_configs)
+
+  components, ccs, labels = set(), set(), set()
+
+  for config in matched_configs:
+    if config.bug_components:
+      components.update(config.bug_components)
+    if config.bug_cc_emails:
+      ccs.update(config.bug_cc_emails)
+    if config.bug_labels:
+      labels.update(config.bug_labels)
+
+  return list(components), list(ccs), list(labels)
+
+
+def GetAlertGroupingQuality(bug_update_builder, tags, url):
+  if not tags or tags.get('auto_bisection') != 'true':
+    logging.debug(
+      '[GroupingQuality] Skipping for non-auto-bisection. Job tags: %s', tags)
+    return
+  job_id = url.split('/')[-1]
+  for commit in bug_update_builder.GetCommits():
+    resp = perf_issue_service_client.GetAlertGroupQuality(job_id, commit)
+    logging.debug('[GroupingQuality] Grouping quality result: %s.', resp)
+
+
+def UpdatePostAndMergeDeferred(bug_update_builder,
+                               bug_id,
+                               tags,
+                               url,
+                               project,
+                               improvement_dir,
+                               sandwiched=False):
   if not bug_id:
     return
   commit_cache_key = bug_update_builder.GenerateCommitCacheKey()
-  bug_update = bug_update_builder.BuildUpdate(tags, url)
-  issue_tracker = issue_tracker_service.IssueTrackerService(
-      utils.ServiceAccountHttp())
+  if not commit_cache_key:
+    logging.debug('UpdatePostAndMergeDeferred: commit_cache_key is None. Bug: "%s"',
+                  bug_id)
+  bug_update = bug_update_builder.BuildUpdate(tags, url, improvement_dir,
+                                              sandwiched)
   merge_details, cc_list = _ComputePostMergeDetails(
-      issue_tracker,
       commit_cache_key,
       bug_update.cc_list,
   )
-  owner, current_bug_status = _GetBugStatus(
-      issue_tracker,
-      bug_id,
-      project=project,
-  )
+
+  bug_data = _GetBugData(bug_id, project)
+  if not bug_data:
+    return
+  owner, current_bug_status = bug_data.get('owner'), bug_data.get('status')
   if not current_bug_status:
     return
 
@@ -424,14 +514,68 @@ def UpdatePostAndMergeDeferred(bug_update_builder, bug_id, tags, url, project):
       )
       cc_list.add(owner.get('email', ''))
 
-  issue_tracker.AddBugComment(
-      bug_id,
-      bug_update.comment_text,
+  current_bug_labels = bug_data.get('labels', [])
+
+  # If the label 'Chromeperf-Delay-Reporting' exists in the filed issue,
+  # the issue is not reported to end users yet.
+  # We need to report by adding the following info from the subscription:
+  # component, cc list and labels.
+  components = []
+  labels = bug_update.labels
+  try:
+    if utils.DELAY_REPORTING_LABEL in current_bug_labels:
+      logging.debug('[DelayReporting] Job tags: %s', tags)
+      auto_bisect_updates = _ComputeAutobisectUpdate(tags)
+
+      if not auto_bisect_updates:
+        logging.warning(
+            '[DelayReporting] Missing info needed for delayed reporting.')
+      else:
+        components = auto_bisect_updates[0]
+        new_cc_list = auto_bisect_updates[1]
+        new_labels = auto_bisect_updates[2]
+        # Speed>Regressions is a place holder when creating an unreported issue.
+        components.append('-Speed>Regressions')
+
+        logging.info(
+            '[DelayReporting] Issue ID: %s. Components: %s, CC: %s, Labels: %s.',
+            bug_id, components, new_cc_list, new_labels)
+
+        cc_list.update(set(new_cc_list))
+        labels_set = set(labels)
+        labels_set.update(set(new_labels))
+        labels = list(labels_set)
+
+  except Exception as e:  # pylint: disable=broad-except
+    logging.warning(
+        '[DelayReporting] Failed to compute auto bisect info. Bug ID: %s. %s',
+        bug_id, str(e))
+
+  if len(current_bug_labels) > 0 and 'DoNotNotify' in current_bug_labels:
+    logging.info(
+        '[DoNotNotify] Removing owner: %s, cc_list: %s and components: %s '
+        'for bug_id: %s in project: %s', bug_owner, cc_list, components, bug_id,
+        project)
+    bug_owner = ''
+    cc_list = set()
+    components = []
+    # We cannot have "Assigned" status with no owner.
+    if status == 'Assigned':
+      status = 'Available'
+
+  # Get Alert Grouping Quality for auto-bisects
+  GetAlertGroupingQuality(
+      bug_update_builder=bug_update_builder, tags=tags, url=url)
+
+  perf_issue_service_client.PostIssueComment(
+      issue_id=bug_id,
+      project_name=project,
+      comment=bug_update.comment_text,
       status=status,
-      cc_list=sorted(cc_list),
+      cc=sorted(cc_list),
+      components=components,
       owner=bug_owner,
-      labels=bug_update.labels,
-      merge_issue=merge_details.get('id'),
-      project=project)
+      labels=labels,
+      merge_issue=merge_details.get('id'))
   update_bug_with_results.UpdateMergeIssue(
       commit_cache_key, merge_details, bug_id, project=project)

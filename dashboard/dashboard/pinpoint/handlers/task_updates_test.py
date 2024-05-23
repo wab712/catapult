@@ -47,7 +47,7 @@ def CreateBuildUpdate(job, commit_id):
                                       (commit_id,)
                               }
                           })
-                  }))
+                  }).encode('utf-8')).decode('utf-8')
       }
   })
 
@@ -74,19 +74,25 @@ def CreateTestUpdate(job, commit_id, attempt):
                                       (commit_id, attempt)
                               }
                           })
-                  }))
+                  }).encode('utf-8')).decode('utf-8')
       }
   })
 
 
+@mock.patch('dashboard.services.swarming.GetAliveBotsByDimensions',
+            mock.MagicMock(return_value=["a"]))
 @mock.patch('dashboard.common.utils.ServiceAccountHttp', mock.MagicMock())
 @mock.patch('dashboard.services.buildbucket_service.Put')
 @mock.patch('dashboard.services.buildbucket_service.GetJobStatus')
+@mock.patch('dashboard.common.cloud_metric.PublishPinpointJobStatusMetric',
+            mock.MagicMock())
+@mock.patch('dashboard.common.cloud_metric.PublishPinpointJobRunTimeMetric',
+            mock.MagicMock())
 class ExecutionEngineTaskUpdatesTest(bisection_test_util.BisectionTestBase):
 
   def setUp(self):
     self.maxDiff = None
-    super(ExecutionEngineTaskUpdatesTest, self).setUp()
+    super().setUp()
 
   def testHandlerGoodCase(self, buildbucket_getjobstatus, buildbucket_put):
     buildbucket_put.return_value = {'build': {'id': '92384098123'}}
@@ -134,12 +140,12 @@ class ExecutionEngineTaskUpdatesTest(bisection_test_util.BisectionTestBase):
                                         'type': 'build',
                                     }
                                 }),
-                        }))
+                        }).encode('utf-8')).decode('utf-8')
             }
         }))
 
   def testPostInvalidData(self, *_):
-    with self.assertRaisesRegexp(ValueError, 'Failed decoding `data`'):
+    with self.assertRaisesRegex(ValueError, 'Failed decoding `data`'):
       task_updates.HandleTaskUpdate(
           json.dumps({
               'message': {
@@ -149,14 +155,17 @@ class ExecutionEngineTaskUpdatesTest(bisection_test_util.BisectionTestBase):
                   'data': '{"not": "base64-encoded"}',
               },
           }))
-    with self.assertRaisesRegexp(ValueError, 'Failed JSON parsing `data`'):
+
+    with self.assertRaisesRegex(ValueError, 'Failed JSON parsing `data`'):
       task_updates.HandleTaskUpdate(
           json.dumps({
               'message': {
                   'attributes': {
                       'nothing': 'important'
                   },
-                  'data': base64.urlsafe_b64encode('not json formatted'),
+                  'data':
+                      base64.urlsafe_b64encode(b'not json formatted').decode(
+                          'utf-8'),
               },
           }))
 
@@ -166,6 +175,9 @@ class ExecutionEngineTaskUpdatesTest(bisection_test_util.BisectionTestBase):
   @mock.patch('dashboard.services.swarming.Task.Result')
   @mock.patch('dashboard.services.isolate.Retrieve')
   @mock.patch.object(results2_module, 'GetCachedResults2', return_value='')
+  @mock.patch(
+      'dashboard.services.perf_issue_service_client.GetAlertGroupQuality',
+      mock.MagicMock(return_value={'result': 'Good'}))
   def testExecutionEngineJobUpdates(self, _, isolate_retrieve,
                                     swarming_task_result, swarming_tasks_new,
                                     isolate_get, buildbucket_getjobstatus,

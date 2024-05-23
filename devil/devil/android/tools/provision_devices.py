@@ -140,11 +140,11 @@ def ProvisionDevices(devices,
 
   parallel_devices.pMap(ProvisionDevice, steps, denylist, reboot_timeout)
 
-  denylisted_devices = denylist.Read() if denylist else []
+  denylisted_devices = denylist.Read() if denylist else dict()
   if output_device_denylist:
     with open(output_device_denylist, 'w') as f:
       json.dump(denylisted_devices, f)
-  if all(d in denylisted_devices for d in devices):
+  if all(str(d) in denylisted_devices for d in devices):
     raise device_errors.NoDevicesError
   return 0
 
@@ -489,14 +489,13 @@ def SetDate(device):
         single_line=True).replace('"', '')
     device_time = datetime.datetime.strptime(device_time, "%Y%m%d.%H%M%S")
     correct_time = datetime.datetime.strptime(strgmtime, date_format)
-    tdelta = (correct_time - device_time).seconds
+    tdelta = abs(correct_time - device_time).seconds
     if tdelta <= 1:
       logger.info('Date/time successfully set on %s', device)
       return True
-    else:
-      logger.error('Date mismatch. Device: %s Correct: %s',
-                   device_time.isoformat(), correct_time.isoformat())
-      return False
+    logger.error('Date mismatch. Device: %s Correct: %s',
+                 device_time.isoformat(), correct_time.isoformat())
+    return False
 
   # Sometimes the date is not set correctly on the devices. Retry on failure.
   if device.IsUserBuild():

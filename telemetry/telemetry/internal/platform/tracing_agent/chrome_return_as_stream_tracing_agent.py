@@ -34,22 +34,21 @@ def ClearStarupTracingStateIfNeeded(platform_backend):
 
 # A class that uses ReturnAsStream mode for chrome tracing.
 class ChromeReturnAsStreamTracingAgent(chrome_tracing_agent.ChromeTracingAgent):
-  def __init__(self, platform_backend, config):
-    super(ChromeReturnAsStreamTracingAgent, self).__init__(
-        platform_backend, config)
-
   @classmethod
   def IsSupported(cls, platform_backend):
-    return platform_backend.GetOSName() != 'fuchsia'
+    # TODO(crbug.com/1279968): Workaround to enable streaming for some fuchsia
+    # platforms while progress is made on others.
+    return True
 
   def _GetTransferMode(self):
     return 'ReturnAsStream'
 
   def _StartStartupTracing(self, config):
-    self._CreateTraceConfigFile(config)
-    logging.info('Created startup trace config file in: %s',
-                 self._trace_config_file)
-    return True
+    if self._CreateTraceConfigFile(config):
+      logging.info('Created startup trace config file in: %s',
+                   self._trace_config_file)
+      return True
+    return False
 
   def _CreateTraceConfigFileString(self, config):
     # See src/components/tracing/trace_config_file.h for the format
@@ -63,6 +62,16 @@ class ChromeReturnAsStreamTracingAgent(chrome_tracing_agent.ChromeTracingAgent):
     assert not self._trace_config_file
     os_name = self._platform_backend.GetOSName()
     if os_name == 'android':
+      # The hard-coded trace config file path is not accessible on non-rooted
+      # devices. In theory it could be changed or made configurable via the
+      # --trace-config-file browser argument, but cursory attempts to do so ran
+      # into issues with Chrome being able to actually read the file if it was
+      # written to a publicly accessibly location. So, don't support startup
+      # tracing on non-rooted devices for now.
+      if not self._platform_backend.require_root:
+        logging.warning(
+            'Non-rooted Android devices do not support startup tracing')
+        return False
       self._trace_config_file = os.path.join(_CHROME_TRACE_CONFIG_DIR_ANDROID,
                                              _CHROME_TRACE_CONFIG_FILE_NAME)
       self._platform_backend.device.WriteFile(
@@ -71,7 +80,8 @@ class ChromeReturnAsStreamTracingAgent(chrome_tracing_agent.ChromeTracingAgent):
       # The config file has fixed path on Android. We need to ensure it is
       # always cleaned up.
       atexit_with_log.Register(self._RemoveTraceConfigFile)
-    elif os_name == 'chromeos':
+      return True
+    if os_name == 'chromeos':
       self._trace_config_file = os.path.join(_CHROME_TRACE_CONFIG_DIR_CROS,
                                              _CHROME_TRACE_CONFIG_FILE_NAME)
       cri = self._platform_backend.cri
@@ -81,7 +91,8 @@ class ChromeReturnAsStreamTracingAgent(chrome_tracing_agent.ChromeTracingAgent):
       # The config file has fixed path on CrOS. We need to ensure it is
       # always cleaned up.
       atexit_with_log.Register(self._RemoveTraceConfigFile)
-    elif os_name in _DESKTOP_OS_NAMES:
+      return True
+    if os_name in _DESKTOP_OS_NAMES:
       self._trace_config_file = os.path.join(tempfile.mkdtemp(),
                                              _CHROME_TRACE_CONFIG_FILE_NAME)
       with open(self._trace_config_file, 'w') as f:
@@ -90,8 +101,11 @@ class ChromeReturnAsStreamTracingAgent(chrome_tracing_agent.ChromeTracingAgent):
         f.write(trace_config_string)
       os.chmod(self._trace_config_file,
                os.stat(self._trace_config_file).st_mode | stat.S_IROTH)
-    else:
-      raise NotImplementedError('Tracing not supported on: %s' % os_name)
+      return True
+    if os_name == 'fuchsia':
+      logging.warning('Fuchsia does not support startup tracing')
+      return False
+    raise NotImplementedError('Tracing not supported on: %s' % os_name)
 
   def _RemoveTraceConfigFile(self):
     if not self._trace_config_file:

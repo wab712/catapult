@@ -3,11 +3,14 @@
 # found in the LICENSE file.
 
 from __future__ import absolute_import
+import hashlib
 import logging
 import os
 import pprint
 import shlex
+import shutil
 import socket
+import tempfile
 
 from telemetry.core import exceptions
 from telemetry import decorators
@@ -50,7 +53,7 @@ class ChromeBrowserBackend(browser_backend.BrowserBackend):
           determined.
       enable_tracing: Defines if a tracing_client is created.
     """
-    super(ChromeBrowserBackend, self).__init__(
+    super().__init__(
         platform_backend=platform_backend,
         browser_options=browser_options,
         supports_extensions=supports_extensions,
@@ -239,6 +242,7 @@ class ChromeBrowserBackend(browser_backend.BrowserBackend):
       return 'main'
     if thread_name.startswith('RenderThread'):
       return 'render'
+    return 'unknown'
 
   def Close(self):
     # If Chrome tracing is running, flush the trace before closing the browser.
@@ -247,7 +251,14 @@ class ChromeBrowserBackend(browser_backend.BrowserBackend):
       tracing_backend.FlushTracing()
 
     if self._devtools_client:
-      if "ENSURE_CLEAN_CHROME_SHUTDOWN" in os.environ:
+      # Telemetry closes Chrome by killing the Chrome process. This doesn't
+      # happen on mac if START_BROWSER_WITH_DEFAULT_PRIORITY, because chrome
+      # is then started using `open` command and telemetry only kills the
+      # 'open' command, leaving Chrome still running.
+      # Therefore force a clean shutdown on mac.
+      if ('ENSURE_CLEAN_CHROME_SHUTDOWN' in os.environ or
+          (os.environ.get('START_BROWSER_WITH_DEFAULT_PRIORITY', False) and
+           self.browser.platform.GetOSName() == 'mac')):
         # Forces a clean shutdown by sending a command to close the browser via
         # the devtools client. Uses a long timeout as a clean shutdown can
         # sometime take a long time to complete.
@@ -269,13 +280,22 @@ class ChromeBrowserBackend(browser_backend.BrowserBackend):
         raise exceptions.BrowserGoneException(self.browser, e)
       raise exceptions.BrowserConnectionGoneException(self.browser, e)
 
+  def GetVersionInfo(self):
+    try:
+      return self.devtools_client.GetVersion()
+    except (inspector_websocket.WebSocketException, socket.error) as e:
+      if not self.IsBrowserRunning():
+        raise exceptions.BrowserGoneException(self.browser, e)
+      raise exceptions.BrowserConnectionGoneException(self.browser, e)
+
   @property
   def supports_memory_dumping(self):
     return True
 
-  def DumpMemory(self, timeout=None, detail_level=None):
+  def DumpMemory(self, timeout=None, detail_level=None, deterministic=False):
     return self.devtools_client.DumpMemory(timeout=timeout,
-                                           detail_level=detail_level)
+                                           detail_level=detail_level,
+                                           deterministic=deterministic)
 
   @property
   def supports_overriding_memory_pressure_notifications(self):
@@ -335,7 +355,7 @@ class ChromeBrowserBackend(browser_backend.BrowserBackend):
             timeout=10)
       except Exception as e:
         raise Exception('%s Did you launch browser with '
-                        '--enable-ui-devtools=0?' % e)
+                        '--enable-ui-devtools=0?' % e) from e
     return self._ui_devtools_client
 
   def GetWindowForTarget(self, target_id):
@@ -343,3 +363,45 @@ class ChromeBrowserBackend(browser_backend.BrowserBackend):
 
   def SetWindowBounds(self, window_id, bounds):
     self.devtools_client.SetWindowBounds(window_id, bounds)
+
+  def _CreateExecutableUniqueDirectory(self, prefix):
+    """Creates a semi-permanent directory unique to the browser executable.
+
+    This directory will persist between different tests, and potentially
+    be available between different test suites, but is liable to be cleaned
+    up by the OS at any point outside of a test suite's run.
+
+    Args:
+      prefix: A string to include before the unique identifier in the
+          directory name.
+
+    Returns:
+      A string containing an absolute path to the created directory, or None if
+      no such directory can be created due to the browser executable being
+      unknown.
+    """
+    executable = self._GetBrowserExecutablePath()
+    if not executable:
+      return None
+    hashfunc = hashlib.sha1()
+    with open(executable, 'rb') as infile:
+      hashfunc.update(infile.read())
+    symbols_dirname = prefix + hashfunc.hexdigest()
+    # We can't use mkdtemp() directly since that will result in the directory
+    # being different, and thus not shared. So, create an unused directory
+    # and use the same parent directory.
+    unused_dir = tempfile.mkdtemp().rstrip(os.path.sep)
+    symbols_dir = os.path.join(os.path.dirname(unused_dir), symbols_dirname)
+    if not os.path.exists(symbols_dir) or not os.path.isdir(symbols_dir):
+      os.makedirs(symbols_dir)
+    shutil.rmtree(unused_dir)
+    return symbols_dir
+
+  def _GetBrowserExecutablePath(self):
+    """Gets the path to the browser executable used for testing.
+
+    Returns:
+      A string containing the path to the executable being used for testing, or
+      None if it cannot be determined.
+    """
+    raise NotImplementedError()

@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env vpython3
 # Copyright 2016 The Chromium Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
@@ -261,7 +261,7 @@ def main():
   expected_devices = GetExpectedDevices(args.known_devices_files)
   usb_devices = set(lsusb.get_android_devices())
   devices = [
-      device_utils.DeviceUtils(s) for s in expected_devices.union(usb_devices)
+      device_utils.DeviceUtils(s) for s in (expected_devices & usb_devices)
   ]
 
   statuses = DeviceStatus(devices, denylist)
@@ -280,7 +280,7 @@ def main():
 
   # Dump the device statuses to JSON.
   if args.json_output:
-    with open(args.json_output, 'wb') as f:
+    with open(args.json_output, 'w') as f:
       f.write(
           json.dumps(
               statuses, indent=4, sort_keys=True, separators=(',', ': ')))

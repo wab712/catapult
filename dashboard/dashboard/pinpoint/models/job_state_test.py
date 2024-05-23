@@ -11,6 +11,7 @@ import math
 import unittest
 import sys
 
+from dashboard.models import anomaly
 from dashboard.pinpoint import test
 from dashboard.pinpoint.models import job_state
 from dashboard.pinpoint.models.change import change_test
@@ -27,7 +28,7 @@ class ExploreTest(test.TestCase):
     self.stream_handler = logging.StreamHandler(sys.stdout)
     self.logger.addHandler(self.stream_handler)
     self.addCleanup(self.logger.removeHandler, self.stream_handler)
-    super(ExploreTest, self).setUp()
+    super().setUp()
 
   def testDifferentWithMidpoint(self):
     quests = [
@@ -48,9 +49,7 @@ class ExploreTest(test.TestCase):
     # and 7.
     expected = [
         change_test.Change(1),
-        change_test.Change(3),
         change_test.Change(5),
-        change_test.Change(7),
         change_test.Change(9),
     ]
 
@@ -58,14 +57,10 @@ class ExploreTest(test.TestCase):
     self.maxDiff = None
     self.assertEqual(state._changes, expected)
     attempt_count_1 = len(state._attempts[change_test.Change(1)])
-    attempt_count_2 = len(state._attempts[change_test.Change(3)])
-    attempt_count_3 = len(state._attempts[change_test.Change(5)])
-    attempt_count_4 = len(state._attempts[change_test.Change(7)])
-    attempt_count_5 = len(state._attempts[change_test.Change(9)])
+    attempt_count_2 = len(state._attempts[change_test.Change(5)])
+    attempt_count_3 = len(state._attempts[change_test.Change(9)])
     self.assertEqual(attempt_count_1, attempt_count_2)
     self.assertEqual(attempt_count_2, attempt_count_3)
-    self.assertEqual(attempt_count_3, attempt_count_4)
-    self.assertEqual(attempt_count_4, attempt_count_5)
     self.assertEqual([], state.Differences())
 
   def testDifferentNoMidpoint(self):
@@ -160,6 +155,26 @@ class ExploreTest(test.TestCase):
     state.AddChange(change_b)
     self.assertEqual([], state.Differences())
 
+  def testNoImprovementDirection(self):
+    """This unit test replicates
+      if ((mean_diff > 0 and self._improvement_direction == anomaly.UP) ...
+      AttributeError: 'JobState' object has no attribute '_improvement_direction'
+    """
+    quests = [quest_test.QuestPass()]
+    state = job_state.JobState(quests, comparison_mode=job_state.PERFORMANCE)
+
+    state.AddChange(change_test.Change(1))
+    state.AddChange(change_test.Change(9))
+
+    self.assertEqual(state._improvement_direction, anomaly.UNKNOWN)
+    delattr(state, "_improvement_direction")
+    self.assertIsNone(getattr(state, "_improvement_direction", None))
+
+    state.ScheduleWork()
+    state.Explore()
+
+    self.assertEqual(state._improvement_direction, anomaly.UNKNOWN)
+
 
 class ScheduleWorkTest(unittest.TestCase):
 
@@ -189,10 +204,11 @@ class ScheduleWorkTest(unittest.TestCase):
     ]
     state = job_state.JobState(quests)
     state.AddChange(change_test.Change(123))
-    expected_regexp = ('.*7/10.*\nInformationalError: Expected error for '
-                       'testing.$')
+    exception_name = 'dashboard.pinpoint.models.errors.InformationalError'
+    expected_regexp = ('.*7/10.*\n%s: Expected error for testing.$' %
+                       exception_name)
     self.assertTrue(state.ScheduleWork())
-    with self.assertRaisesRegexp(Exception, expected_regexp):
+    with self.assertRaisesRegex(Exception, expected_regexp):
       self.assertFalse(state.ScheduleWork())
 
   def testAbortAfterNChanges(self):
@@ -202,7 +218,8 @@ class ScheduleWorkTest(unittest.TestCase):
     for i in range(n):
       state.AddChange(change_test.Change(i))
     self.assertEqual(len(state._changes), n)
-    with self.assertRaisesRegexp(Exception, '(.+)The number of builds exceeded %d.(.+)' % n):
+    expected_regexp = ('Bisected max number of times: %d.+' % n)
+    with self.assertRaisesRegex(Exception, expected_regexp):
       state.AddChange(change_test.Change(123))
 
 

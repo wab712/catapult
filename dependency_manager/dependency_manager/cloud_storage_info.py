@@ -10,7 +10,7 @@ from py_utils import cloud_storage
 
 from dependency_manager import exceptions
 
-class CloudStorageInfo(object):
+class CloudStorageInfo():
   def __init__(self, cs_bucket, cs_hash, download_path, cs_remote_path,
                version_in_cs=None, archive_info=None):
     """ Container for the information needed to download a dependency from
@@ -79,7 +79,7 @@ class CloudStorageInfo(object):
         self._cs_remote_path, self._download_path, self._cs_bucket,
         self._cs_hash)
     if not os.path.exists(dependency_path):
-      raise exceptions.FileNotFoundError(dependency_path)
+      raise exceptions.FileNotFoundAtError(dependency_path)
 
     if self.has_archive_info:
       dependency_path = self._archive_info.GetUnzippedPath()

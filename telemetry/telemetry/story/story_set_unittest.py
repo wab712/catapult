@@ -21,22 +21,21 @@ class SharedStateBar(story.SharedState):
 class StoryFoo(story.Story):
   def __init__(self, name='', labels=None, grouping_keys=None,
                shared_state_class=SharedStateFoo):
-    super(StoryFoo, self).__init__(
+    super().__init__(
         shared_state_class, name, labels, grouping_keys=grouping_keys)
 
 
 class StorySetFoo(story.StorySet):
   """ StorySetFoo is a story set created for testing purpose. """
-  pass
 
 
 class StorySetTest(unittest.TestCase):
 
   def testStorySetTestName(self):
-    self.assertEquals('story_set_unittest', StorySetFoo.Name())
+    self.assertEqual('story_set_unittest', StorySetFoo.Name())
 
   def testStorySetTestDescription(self):
-    self.assertEquals(
+    self.assertEqual(
         ' StorySetFoo is a story set created for testing purpose. ',
         StorySetFoo.Description())
 

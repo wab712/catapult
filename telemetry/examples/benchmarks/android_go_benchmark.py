@@ -26,7 +26,7 @@ class SharedAndroidStoryState(story_module.SharedState):
       finder_options: A finder_options object
       story_set: (unused)
     """
-    super(SharedAndroidStoryState, self).__init__(
+    super().__init__(
         test, finder_options, story_set, possible_browser)
     self._finder_options = finder_options
     if not self._possible_browser:
@@ -108,13 +108,13 @@ class AndroidGoFooStory(story_module.Story):
   URL = 'https://en.wikipedia.org/wiki/Main_Page'
 
   def __init__(self):
-    super(AndroidGoFooStory, self).__init__(
+    super().__init__(
         SharedAndroidStoryState, name='go:story:foo')
 
-  def Run(self, state):
+  def Run(self, shared_state):
     for _ in range(3):
-      state.LaunchBrowser(self.URL)
-      with state.FindBrowser() as browser:
+      shared_state.LaunchBrowser(self.URL)
+      with shared_state.FindBrowser() as browser:
         action_runner = browser.foreground_tab.action_runner
         action_runner.tab.WaitForDocumentReadyStateToBeComplete()
         action_runner.RepeatableBrowserDrivenScroll(repeat_count=2)
@@ -122,12 +122,12 @@ class AndroidGoFooStory(story_module.Story):
 
 class AndroidGoBarStory(story_module.Story):
   def __init__(self):
-    super(AndroidGoBarStory, self).__init__(
+    super().__init__(
         SharedAndroidStoryState, name='go:story:bar')
 
-  def Run(self, state):
-    state.LaunchBrowser('http://www.bbc.co.uk/news')
-    with state.FindBrowser() as browser:
+  def Run(self, shared_state):
+    shared_state.LaunchBrowser('http://www.bbc.co.uk/news')
+    with shared_state.FindBrowser() as browser:
       action_runner = browser.foreground_tab.action_runner
       action_runner.tab.WaitForDocumentReadyStateToBeComplete()
       action_runner.RepeatableBrowserDrivenScroll(repeat_count=2)
@@ -135,7 +135,7 @@ class AndroidGoBarStory(story_module.Story):
 
 class AndroidGoStories(story_module.StorySet):
   def __init__(self):
-    super(AndroidGoStories, self).__init__()
+    super().__init__()
     self.AddStory(AndroidGoFooStory())
     self.AddStory(AndroidGoBarStory())
 

@@ -36,7 +36,7 @@ class Browser(app.App):
   """
   def __init__(self, backend, platform_backend, startup_args,
                find_existing=False):
-    super(Browser, self).__init__(app_backend=backend,
+    super().__init__(app_backend=backend,
                                   platform_backend=platform_backend)
     try:
       self._browser_backend = backend
@@ -109,7 +109,13 @@ class Browser(app.App):
     os_detail = self._platform_backend.platform.GetOSVersionDetailString()
     if os_detail:
       logs.append(' Detailed OS version: %s' % os_detail)
-    system_info = self.GetSystemInfo()
+
+    # The browser might not yet be running at initialization so skip getting
+    # system info via DevTools if that is the case.
+    if self._browser_backend.IsBrowserRunning():
+      system_info = self.GetSystemInfo()
+    else:
+      system_info = None
     if system_info:
       if system_info.model_name:
         logs.append(' Model: %s' % system_info.model_name)
@@ -212,19 +218,26 @@ class Browser(app.App):
        See the documentation of the SystemInfo class for more details."""
     return self._browser_backend.GetSystemInfo()
 
+  def GetVersionInfo(self):
+    """Returns browser version information.
+
+    Returns: A dict containing available version information for the browser.
+    """
+    return self._browser_backend.GetVersionInfo()
+
   @property
   def supports_memory_dumping(self):
     return self._browser_backend.supports_memory_dumping
 
-  def DumpMemory(self, timeout=None):
+  def DumpMemory(self, timeout=None, deterministic=False):
     try:
-      return self._browser_backend.DumpMemory(timeout=timeout)
-    except tracing_backend.TracingUnrecoverableException:
+      return self._browser_backend.DumpMemory(timeout=timeout, deterministic=deterministic)
+    except tracing_backend.TracingUnrecoverableException as e:
       logging.exception('Failed to record memory dump due to exception:')
       # Re-raise as an AppCrashException to obtain further debug information
       # about the browser state.
       raise exceptions.AppCrashException(
-          app=self, msg='Browser failed to record memory dump.')
+          app=self, msg='Browser failed to record memory dump.') from e
 
   @property
   def supports_java_heap_garbage_collection( # pylint: disable=invalid-name

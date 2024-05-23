@@ -41,7 +41,7 @@ def main():
       'main', 'multiple_histograms_for_row')
   orphaned_histogram = Metrics.counter('main', 'orphaned_histogram')
 
-  """
+  _ = """
   CREATE TABLE `chromeperf.chromeperf_dashboard_rows.<MASTER>`
   (revision INT64 NOT NULL,
    value FLOAT64 NOT NULL,
@@ -55,7 +55,7 @@ def main():
    sample_values ARRAY<FLOAT64>)
   PARTITION BY DATE(`timestamp`)
   CLUSTER BY master, bot, measurement;
-  """  # pylint: disable=pointless-string-statement
+  """
   bq_row_schema = {
       'fields': [
           {
@@ -127,6 +127,8 @@ def main():
         if key in d or key in ['parent_test', 'error']:
           # skip properties with dedicated columns.
           continue
+        if isinstance(value, datetime.date):
+          value = value.isoformat()
         if isinstance(value, float):
           value = FloatHack(value)
         properties[key] = value
@@ -189,7 +191,7 @@ def main():
     count = len(sample_values)
     sample_values = [v for v in sample_values if v is not None]
     if len(sample_values) != count:
-      logging.getLogger().warn(
+      logging.getLogger().warning(
           'Histogram data.sampleValues contains null: %r', entity.key)
     for v in sample_values:
       if not isinstance(v, (int, float)):
@@ -238,7 +240,7 @@ def main():
       orphaned_histogram.inc()
       logging.getLogger().error("No Row for Histogram(s) (%r)", group_key)
       return []
-    elif len(rows) > 1:
+    if len(rows) > 1:
       row_conflicts.inc()
       logging.getLogger().error("Multiple rows (%d) for %r", len(rows),
                                 group_key)

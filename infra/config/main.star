@@ -9,11 +9,10 @@ After modifying this file execute it ('./main.star') to regenerate the configs.
 This is also enforced by PRESUBMIT.py script.
 """
 
-lucicfg.check_version("1.24.2", "Please update depot_tools")
+lucicfg.check_version("1.31.1", "Please update depot_tools")
 
-# Enable LUCI Realms support.
-lucicfg.enable_experiment("crbug.com/1085650")
-luci.builder.defaults.experiments.set({"luci.use_realms": 100})
+# Use LUCI Scheduler BBv2 names and add Scheduler realms configs.
+lucicfg.enable_experiment("crbug.com/1182002")
 
 lucicfg.config(
     config_dir = "generated",
@@ -60,6 +59,12 @@ luci.project(
             groups = "luci-logdog-chromium-writers",
         ),
     ],
+    bindings = [
+        luci.binding(
+            roles = "role/configs.validator",
+            users = "catapult-try-builder@chops-service-accounts.iam.gserviceaccount.com",
+        ),
+    ],
 )
 
 # Per-service tweaks.
@@ -97,13 +102,17 @@ luci.cq_group(
 )
 
 # Matches any file under the 'dashboard' root directory.
-DASHBOARD_RE = ".+[+]/dashboard/.+"
+DASHBOARD_RE = "dashboard/.+"
+
+# Matches any file under the 'perf_issue_service' root directory.
+PERF_ISSUE_SERVICE_RE = "perf_issue_service/.+"
 
 def try_builder(
         name,
         os,
         is_dashboard = False,
         is_presubmit = False,
+        is_perf_issue_service = False,
         experiment = None,
         properties = None,
         dimensions = None):
@@ -115,6 +124,8 @@ def try_builder(
       os: The swarming `os` dimension.
       is_dashboard: True if this only processes
         the 'dashboard' portion of catapult.
+      is_perf_issue_service: True if this only processes
+        the 'perf_issue_service' portion of catapult.
       is_presubmit: True if this runs PRESUBMIT.
       experiment: Value 0-100 for the cq experiment %.
       properties: {key: value} dictionary for extra properties.
@@ -130,7 +141,7 @@ def try_builder(
 
     dims = {
         "pool": "luci.flex.try",
-        "os": os,
+        "os": "Ubuntu-18" if os == "Ubuntu" else os,
     }
     if dimensions:
         dims.update(dimensions)
@@ -140,15 +151,19 @@ def try_builder(
     executable = luci.recipe(
         name = "catapult",
         cipd_package = "infra/recipe_bundles/chromium.googlesource.com/chromium/tools/build",
+        use_bbagent = True,
     )
     if is_presubmit:
         executable = luci.recipe(
             name = "run_presubmit",
             cipd_package = "infra/recipe_bundles/chromium.googlesource.com/chromium/tools/build",
+            use_bbagent = True,
         )
         props["repo_name"] = "catapult"
     if is_dashboard:
         props["dashboard_only"] = True
+    if is_perf_issue_service:
+        props["perf_issue_service_only"] = True
 
     luci.builder(
         name = name,
@@ -163,10 +178,33 @@ def try_builder(
 
     verifier_kwargs = {}
 
+    # dashboard/ and perf_issue_service are individual services where
+    # changes should not affect the other Catapult modules. Thus, the
+    # Catapult Tryservers should *not* run if changes are only in
+    # /dashboard or /perf_issue_service.
     # Presubmit sees all changes
     if not is_presubmit:
+        verifier_kwargs["location_filters"] = [
+            cq.location_filter(path_regexp = ".*"),
+        ]
         if not is_dashboard:
-            verifier_kwargs["location_regexp_exclude"] = [DASHBOARD_RE]
+            # non-dashboard try jobs should not run if changes are only
+            # in DASHBOARD_RE
+            verifier_kwargs["location_filters"].append(
+                cq.location_filter(
+                    path_regexp = DASHBOARD_RE,
+                    exclude = True,
+                ),
+            )
+        if not is_perf_issue_service:
+            # non-perf_issue_service try jobs should not run if changes
+            # are only in PERF_ISSUE_SERVICE_RE
+            verifier_kwargs["location_filters"].append(
+                cq.location_filter(
+                    path_regexp = PERF_ISSUE_SERVICE_RE,
+                    exclude = True,
+                ),
+            )
     if experiment != None:
         verifier_kwargs["experiment_percentage"] = experiment
 
@@ -177,19 +215,18 @@ def try_builder(
         **verifier_kwargs
     )
 
-try_builder("Catapult Linux Tryserver", "Ubuntu", properties = {"use_python3": True})
-try_builder("Catapult Linux Tryserver Py2", "Ubuntu")
+try_builder("Catapult Linux Tryserver", "Ubuntu")
 
-try_builder("Catapult Windows Tryserver Py2", "Windows-10")
-try_builder("Catapult Windows Tryserver", "Windows-10", properties = {"use_python3": True})
-try_builder("Catapult Win 7 Tryserver", "Windows-7", experiment = 100, properties = {"use_python3": True})
+try_builder("Catapult Windows Tryserver", "Windows-10")
 
-try_builder("Catapult Mac Tryserver Py2", "Mac")
-try_builder("Catapult Mac Tryserver", "Mac", properties = {"use_python3": True})
+try_builder("Catapult Mac Tryserver", "Mac", dimensions = {"cpu": "x86-64"})
 
-try_builder("Catapult Android Tryserver", "Android", dimensions = {"device_type": "bullhead"}, properties = {"platform": "android", "use_python3": True})
-try_builder("Catapult Android Tryserver Py2", "Android", dimensions = {"device_type": "bullhead"}, properties = {"platform": "android"})
+try_builder("Catapult Mac M1 Tryserver", "Mac", dimensions = {"cpu": "arm"})
+
+try_builder("Catapult Android Tryserver", "Android", experiment = 100, dimensions = {"device_type": "walleye"}, properties = {"platform": "android"})
 
 try_builder("Catapult Presubmit", "Ubuntu", is_presubmit = True)
 
 try_builder("Dashboard Linux Tryserver", "Ubuntu", is_dashboard = True)
+
+try_builder("Perf Issue Service Linux Tryserver", "Ubuntu", is_perf_issue_service = True, experiment = 100)

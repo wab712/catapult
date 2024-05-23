@@ -34,7 +34,7 @@ _BASE_EXTRA_ARGS = [
     'release',
 ] + _COMBINED_DEFAULT_EXTRA_ARGS
 _TELEMETRY_COMMAND = [
-    'luci-auth', 'context', '--', 'vpython', '../../testing/test_env.py',
+    'luci-auth', 'context', '--', 'vpython3', '../../testing/test_env.py',
     '../../testing/scripts/run_performance_tests.py',
     '../../tools/perf/run_benchmark'
 ]
@@ -52,10 +52,11 @@ class StartTest(unittest.TestCase):
     change = mock.MagicMock(spec=change_module.Change)
     change.base_commit = mock.MagicMock(spec=commit.Commit)
     change.base_commit.AsDict = mock.MagicMock(
-        return_value={'commit_position': 675460})
+        return_value={'commit_position': 999999})
     execution = quest.Start(change, 'https://isolate.server', 'isolate hash')
     self.assertEqual(execution._extra_args,
                      ['arg', '--results-label', mock.ANY])
+    self.assertIn('vpython3', execution.command)
 
   def testSwarmingTags(self):
     arguments = dict(_BASE_ARGUMENTS)
@@ -172,7 +173,6 @@ class FromDictTest(unittest.TestCase):
     quest = run_telemetry_test.RunTelemetryTest.FromDict(arguments)
 
     extra_args = [
-        '-d',
         '--benchmarks',
         'speedometer',
         '--story-filter',
@@ -200,25 +200,6 @@ class FromDictTest(unittest.TestCase):
     del arguments['browser']
     with self.assertRaises(TypeError):
       run_telemetry_test.RunTelemetryTest.FromDict(arguments)
-
-  def testStartupBenchmarkRepeatCount(self):
-    arguments = dict(_BASE_ARGUMENTS)
-    arguments['benchmark'] = 'start_with_url.warm.startup_pages'
-    quest = run_telemetry_test.RunTelemetryTest.FromDict(arguments)
-
-    extra_args = [
-        '-d',
-        '--benchmarks',
-        'start_with_url.warm.startup_pages',
-        '--pageset-repeat',
-        '2',
-        '--browser',
-        'release',
-    ] + _COMBINED_DEFAULT_EXTRA_ARGS
-    expected = run_telemetry_test.RunTelemetryTest(
-        'server', run_test_test.DIMENSIONS, extra_args, _BASE_SWARMING_TAGS,
-        _TELEMETRY_COMMAND, 'out/Release')
-    self.assertEqual(quest, expected)
 
   def testWebview(self):
     arguments = dict(_BASE_ARGUMENTS)

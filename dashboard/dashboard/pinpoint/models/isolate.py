@@ -17,9 +17,9 @@ import datetime
 from google.appengine.ext import deferred
 from google.appengine.ext import ndb
 
-# Isolates expire in isolate server after 60 days. We expire
+# Isolates expire on RBE CAS server after 32 days. We expire
 # our isolate lookups a little bit sooner, just to be safe.
-ISOLATE_EXPIRY_DURATION = datetime.timedelta(days=58)
+ISOLATE_EXPIRY_DURATION = datetime.timedelta(days=30)
 
 
 def Get(builder_name, change, target):
@@ -48,7 +48,7 @@ def Get(builder_name, change, target):
 def Put(isolate_infos):
   """Add isolate hashes to the Datastore.
 
-  This function takes multiple entries to do a batched Datstore put.
+  This function takes multiple entries to do a batched Datastore put.
 
   Args:
     isolate_infos: An iterable of tuples. Each tuple is of the form

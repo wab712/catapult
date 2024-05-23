@@ -24,6 +24,7 @@ from telemetry.internal.backends.chrome_inspector import inspector_runtime
 from telemetry.internal.backends.chrome_inspector import inspector_serviceworker
 from telemetry.internal.backends.chrome_inspector import inspector_storage
 from telemetry.internal.backends.chrome_inspector import inspector_websocket
+from telemetry.internal.backends.chrome_inspector import websocket
 from telemetry.util import js_template
 
 import py_utils
@@ -43,6 +44,9 @@ def _HandleInspectorWebSocketExceptions(func):
     except (socket.error, inspector_websocket.WebSocketException,
             inspector_websocket.WebSocketDisconnected) as e:
       inspector_backend._ConvertExceptionFromInspectorWebsocket(e)
+    # Will never actually get hit, but Pylint doesn't realize that the above
+    # except re-raises the exception.
+    raise RuntimeError()
 
   return Inner
 
@@ -90,11 +94,19 @@ class InspectorBackend(six.with_metaclass(trace_event.TracedMetaClass, object)):
     This method intentionally leaves the self._websocket object around, so that
     future calls it to it will fail with a relevant error.
     """
+    self._DisconnectWithoutTracing()
+
+  def _DisconnectWithoutTracing(self):
+    # All methods in this class are automatically traced unless they start with
+    # _ due to using TracedMetaClass as a meta class. This causes issues with
+    # the destructor, as we can deadlock when trying to acquire the tracing lock
+    # if another test has already started and is starting tracing up when the
+    # destructor is called. So, make all code called from __del__ untraced.
     if self._websocket:
       self._websocket.Disconnect()
 
   def __del__(self):
-    self.Disconnect()
+    self._DisconnectWithoutTracing()
 
   @property
   def app(self):
@@ -192,10 +204,6 @@ class InspectorBackend(six.with_metaclass(trace_event.TracedMetaClass, object)):
   @_HandleInspectorWebSocketExceptions
   def Navigate(self, url, script_to_evaluate_on_commit, timeout):
     self._page.Navigate(url, script_to_evaluate_on_commit, timeout)
-
-  @_HandleInspectorWebSocketExceptions
-  def GetCookieByName(self, name, timeout):
-    return self._page.GetCookieByName(name, timeout)
 
   # Console public methods.
 
@@ -690,7 +698,6 @@ class InspectorBackend(six.with_metaclass(trace_event.TracedMetaClass, object)):
       exceptions.DevtoolsTargetCrashException: On any other error, the most
         likely explanation is that the devtool's target crashed.
     """
-    # pylint: disable=redefined-variable-type
     if isinstance(error, inspector_websocket.WebSocketException):
       new_error = exceptions.TimeoutException()
       new_error.AddDebuggingMessage(exceptions.AppCrashException(
@@ -730,6 +737,12 @@ class InspectorBackend(six.with_metaclass(trace_event.TracedMetaClass, object)):
       return self._runtime.Evaluate(expression, context_id, timeout,
                                     user_gesture, promise)
     except inspector_websocket.WebSocketException as e:
+      if issubclass(e.websocket_error_type,
+                    websocket.WebSocketConnectionClosedException):
+        logging.error('Inspector connection lost.')
+        # Any attempt to send further requests (e.g., to crash processes as
+        # below) is guaranteed to fail, so simply propagate the exception.
+        raise e
       logging.error('Renderer process hung; forcibly crashing it and '
                     'GPU process. Note that GPU process minidumps '
                     'require --enable-gpu-benchmarking browser arg.')

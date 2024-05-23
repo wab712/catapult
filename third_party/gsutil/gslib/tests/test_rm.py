@@ -19,9 +19,12 @@ from __future__ import print_function
 from __future__ import division
 from __future__ import unicode_literals
 
+import os
 import re
+import sys
+from unittest import mock
 
-from gslib.exception import NO_URLS_MATCHED_GENERIC
+from gslib.exception import NO_URLS_MATCHED_PREFIX
 from gslib.exception import NO_URLS_MATCHED_TARGET
 import gslib.tests.testcase as testcase
 from gslib.tests.testcase.base import MAX_BUCKET_LENGTH
@@ -30,7 +33,15 @@ import gslib.tests.util as util
 from gslib.tests.util import GenerationFromURI as urigen
 from gslib.tests.util import ObjectToURI as suri
 from gslib.tests.util import SetBotoConfigForTest
+from gslib.tests.util import SetEnvironmentForTest
 from gslib.utils.retry_util import Retry
+
+MACOS_WARNING = (
+    'If you experience problems with multiprocessing on MacOS, they might be '
+    'related to https://bugs.python.org/issue33725. You can disable '
+    'multiprocessing by editing your .boto config or by adding the following '
+    'flag to your command: `-o "GSUtil:parallel_process_count=1"`. Note that '
+    'multithreading is still available even if you disable multiprocessing.')
 
 
 class TestRm(testcase.GsUtilIntegrationTestCase):
@@ -44,6 +55,8 @@ class TestRm(testcase.GsUtilIntegrationTestCase):
     Returns:
       The cumulative stderr output without the expected UI output.
     """
+    if self._use_gcloud_storage:
+      return self._CleanOutputLinesForGcloudStorage(stderr)
     ui_output_pattern = '[^\n\r]*objects][^\n\r]*[\n\r]'
     final_message_pattern = 'Operation completed over[^\n]*'
     ui_spinner_list = ['\\\r', '|\r', '/\r', '-\r']
@@ -53,6 +66,22 @@ class TestRm(testcase.GsUtilIntegrationTestCase):
     for ui_line in ui_lines_list:
       stderr = stderr.replace(ui_line, '')
     return stderr
+
+  def _CleanOutputLinesForGcloudStorage(self, stderr):
+    """Remove irrelevant lines from the output lines."""
+    stderr_lines = stderr.splitlines()
+    valid_lines = []
+    strings_to_remove = set(['Removing objects:', 'Removing Buckets:', '  '])
+    for line in stderr_lines:
+      if line in strings_to_remove:
+        continue
+      # Gcloud storage logs a '.' for each resource in non-interactive mode.
+      # This might get added to the start of a valid line.
+      # e.g. ".Removing gs://bucket/obj"
+      cleaned_line = line.lstrip('.')
+      if cleaned_line:
+        valid_lines.append(cleaned_line)
+    return os.linesep.join(valid_lines)
 
   def _RunRemoveCommandAndCheck(self,
                                 command_and_args,
@@ -96,7 +125,7 @@ class TestRm(testcase.GsUtilIntegrationTestCase):
                               stdin=stdin)
       num_objects = len(object_strings)
       # Asserting for operation completion
-      if '-q' not in command_and_args:
+      if '-q' not in command_and_args and not self._use_gcloud_storage:
         if '-m' in command_and_args:
           self.assertIn('[%d/%d objects]' % (num_objects, num_objects), stderr)
         else:
@@ -106,6 +135,8 @@ class TestRm(testcase.GsUtilIntegrationTestCase):
       stderr_set = set(stderr.splitlines())
       if '' in stderr_set:
         stderr_set.remove('')  # Avoid groups represented by an empty string.
+      if MACOS_WARNING in stderr_set:
+        stderr_set.remove(MACOS_WARNING)
       self.assertEqual(stderr_set, expected_stderr_lines)
     else:
       cumulative_stderr_lines = set()
@@ -121,7 +152,7 @@ class TestRm(testcase.GsUtilIntegrationTestCase):
         update_lines = True
         # Retry 404's and 409's due to eventual listing consistency, but don't
         # add the output to the set.
-        if (NO_URLS_MATCHED_GENERIC in stderr or
+        if (NO_URLS_MATCHED_PREFIX in stderr or
             '409 BucketNotEmpty' in stderr or
             '409 VersionedBucketNotEmpty' in stderr):
           update_lines = False
@@ -131,6 +162,10 @@ class TestRm(testcase.GsUtilIntegrationTestCase):
         # case we will never see all of the expected "Removing object..."
         # messages. Since this is still a successful outcome, just return
         # successfully.
+        if self._use_gcloud_storage:
+          bucket_not_found_string = 'not found'
+        else:
+          bucket_not_found_string = 'bucket does not exist'
         if '-r' in command_and_args and 'bucket does not exist' in stderr:
           for bucket_to_remove in buckets_to_remove:
             matching_bucket = re.match(
@@ -155,10 +190,10 @@ class TestRm(testcase.GsUtilIntegrationTestCase):
   def test_all_versions_current(self):
     """Test that 'rm -a' for an object with a current version works."""
     bucket_uri = self.CreateVersionedBucket()
-    key_uri = bucket_uri.clone_replace_name('foo')
-    key_uri.set_contents_from_string('bar')
+    key_uri = self.StorageUriCloneReplaceName(bucket_uri, 'foo')
+    self.StorageUriSetContentsFromString(key_uri, 'bar')
     g1 = urigen(key_uri)
-    key_uri.set_contents_from_string('baz')
+    self.StorageUriSetContentsFromString(key_uri, 'baz')
     g2 = urigen(key_uri)
 
     def _Check1(stderr_lines):
@@ -189,10 +224,10 @@ class TestRm(testcase.GsUtilIntegrationTestCase):
   def test_all_versions_no_current(self):
     """Test that 'rm -a' for an object without a current version works."""
     bucket_uri = self.CreateVersionedBucket()
-    key_uri = bucket_uri.clone_replace_name('foo')
-    key_uri.set_contents_from_string('bar')
+    key_uri = self.StorageUriCloneReplaceName(bucket_uri, 'foo')
+    self.StorageUriSetContentsFromString(key_uri, 'bar')
     g1 = urigen(key_uri)
-    key_uri.set_contents_from_string('baz')
+    self.StorageUriSetContentsFromString(key_uri, 'baz')
     g2 = urigen(key_uri)
     self._RunRemoveCommandAndCheck(
         ['-m', 'rm', '-a', suri(key_uri)],
@@ -208,7 +243,12 @@ class TestRm(testcase.GsUtilIntegrationTestCase):
         ['rm', '-a', '%s' % suri(bucket_uri, 'foo')],
         return_stderr=True,
         expected_status=1)
-    self.assertIn(NO_URLS_MATCHED_TARGET % suri(bucket_uri, 'foo'), stderr)
+    if self._use_gcloud_storage:
+      no_url_matched_target = no_url_matched_target = (
+          'The following URLs matched no objects or files:\n-%s')
+    else:
+      no_url_matched_target = NO_URLS_MATCHED_TARGET
+    self.assertIn(no_url_matched_target % suri(bucket_uri, 'foo'), stderr)
 
   def test_remove_recursive_prefix(self):
     bucket_uri = self.CreateBucket()
@@ -225,14 +265,14 @@ class TestRm(testcase.GsUtilIntegrationTestCase):
   def test_remove_all_versions_recursive_on_bucket(self):
     """Test that 'rm -r' works on bucket."""
     bucket_uri = self.CreateVersionedBucket()
-    k1_uri = bucket_uri.clone_replace_name('foo')
-    k2_uri = bucket_uri.clone_replace_name('foo2')
-    k1_uri.set_contents_from_string('bar')
-    k2_uri.set_contents_from_string('bar2')
+    k1_uri = self.StorageUriCloneReplaceName(bucket_uri, 'foo')
+    k2_uri = self.StorageUriCloneReplaceName(bucket_uri, 'foo2')
+    self.StorageUriSetContentsFromString(k1_uri, 'bar')
+    self.StorageUriSetContentsFromString(k2_uri, 'bar2')
     k1g1 = urigen(k1_uri)
     k2g1 = urigen(k2_uri)
-    k1_uri.set_contents_from_string('baz')
-    k2_uri.set_contents_from_string('baz2')
+    self.StorageUriSetContentsFromString(k1_uri, 'baz')
+    self.StorageUriSetContentsFromString(k2_uri, 'baz2')
     k1g2 = urigen(k1_uri)
     k2g2 = urigen(k2_uri)
 
@@ -255,21 +295,27 @@ class TestRm(testcase.GsUtilIntegrationTestCase):
       stderr = self.RunGsUtil(['ls', '-a', suri(bucket_uri)],
                               return_stderr=True,
                               expected_status=1)
-      self.assertIn('bucket does not exist', stderr)
+      if self._use_gcloud_storage:
+        if self._use_gcloud_storage:
+          # GCS and S3 responses.
+          self.assertTrue('not found: 404' in stderr or
+                          'NoSuchBucket' in stderr)
+      else:
+        self.assertIn('bucket does not exist', stderr)
 
     _Check()
 
   def test_remove_all_versions_recursive_on_subdir(self):
     """Test that 'rm -r' works on subdir."""
     bucket_uri = self.CreateVersionedBucket()
-    k1_uri = bucket_uri.clone_replace_name('dir/foo')
-    k2_uri = bucket_uri.clone_replace_name('dir/foo2')
-    k1_uri.set_contents_from_string('bar')
-    k2_uri.set_contents_from_string('bar2')
+    k1_uri = self.StorageUriCloneReplaceName(bucket_uri, 'dir/foo')
+    k2_uri = self.StorageUriCloneReplaceName(bucket_uri, 'dir/foo2')
+    self.StorageUriSetContentsFromString(k1_uri, 'bar')
+    self.StorageUriSetContentsFromString(k2_uri, 'bar2')
     k1g1 = urigen(k1_uri)
     k2g1 = urigen(k2_uri)
-    k1_uri.set_contents_from_string('baz')
-    k2_uri.set_contents_from_string('baz2')
+    self.StorageUriSetContentsFromString(k1_uri, 'baz')
+    self.StorageUriSetContentsFromString(k2_uri, 'baz2')
     k1g2 = urigen(k1_uri)
     k2g2 = urigen(k2_uri)
 
@@ -310,10 +356,13 @@ class TestRm(testcase.GsUtilIntegrationTestCase):
                                    contents=b'foo')
     if self.multiregional_buckets:
       self.AssertNObjectsInBucket(bucket_uri, 1)
-    self.RunGsUtil(
-        ['rm', '%s' % suri(bucket_uri, 'missing'),
-         suri(object_uri)],
-        expected_status=1)
+    if not self._use_gcloud_storage:
+      # Gcloud storage continues on missing objects by default.
+      # So we will skip running this for gcloud storage.
+      self.RunGsUtil(
+          ['rm', '%s' % suri(bucket_uri, 'missing'),
+           suri(object_uri)],
+          expected_status=1)
     stderr = self.RunGsUtil(
         ['rm', '-f',
          '%s' % suri(bucket_uri, 'missing'),
@@ -326,8 +375,8 @@ class TestRm(testcase.GsUtilIntegrationTestCase):
   def test_some_missing(self):
     """Test that 'rm -a' fails when some but not all uris don't exist."""
     bucket_uri = self.CreateVersionedBucket()
-    key_uri = bucket_uri.clone_replace_name('foo')
-    key_uri.set_contents_from_string('bar')
+    key_uri = self.StorageUriCloneReplaceName(bucket_uri, 'foo')
+    self.StorageUriSetContentsFromString(key_uri, 'bar')
     if self.multiregional_buckets:
       self.AssertNObjectsInBucket(bucket_uri, 1, versioned=True)
     stderr = self.RunGsUtil(
@@ -337,13 +386,19 @@ class TestRm(testcase.GsUtilIntegrationTestCase):
         return_stderr=True,
         expected_status=1)
     self.assertEqual(stderr.count('Removing %s://' % self.default_provider), 1)
-    self.assertIn(NO_URLS_MATCHED_TARGET % suri(bucket_uri, 'missing'), stderr)
+    if self._use_gcloud_storage:
+      self.assertIn(
+          'The following URLs matched no objects or files:\n-%s' %
+          suri(bucket_uri, 'missing'), stderr)
+    else:
+      self.assertIn(NO_URLS_MATCHED_TARGET % suri(bucket_uri, 'missing'),
+                    stderr)
 
   def test_some_missing_force(self):
     """Test that 'rm -af' succeeds despite hidden first uri."""
     bucket_uri = self.CreateVersionedBucket()
-    key_uri = bucket_uri.clone_replace_name('foo')
-    key_uri.set_contents_from_string('bar')
+    key_uri = self.StorageUriCloneReplaceName(bucket_uri, 'foo')
+    self.StorageUriSetContentsFromString(key_uri, 'bar')
     if self.multiregional_buckets:
       self.AssertNObjectsInBucket(bucket_uri, 1, versioned=True)
     stderr = self.RunGsUtil(
@@ -358,10 +413,10 @@ class TestRm(testcase.GsUtilIntegrationTestCase):
   def test_folder_objects_deleted(self):
     """Test for 'rm -r' of a folder with a dir_$folder$ marker."""
     bucket_uri = self.CreateVersionedBucket()
-    key_uri = bucket_uri.clone_replace_name('abc/o1')
-    key_uri.set_contents_from_string('foobar')
-    folder_uri = bucket_uri.clone_replace_name('abc_$folder$')
-    folder_uri.set_contents_from_string('')
+    key_uri = self.StorageUriCloneReplaceName(bucket_uri, 'abc/o1')
+    self.StorageUriSetContentsFromString(key_uri, 'foobar')
+    folder_uri = self.StorageUriCloneReplaceName(bucket_uri, 'abc_$folder$')
+    self.StorageUriSetContentsFromString(folder_uri, '')
 
     def _RemoveAndCheck():
       self.RunGsUtil(['rm', '-r', '%s' % suri(bucket_uri, 'abc')],
@@ -385,10 +440,30 @@ class TestRm(testcase.GsUtilIntegrationTestCase):
   def test_folder_objects_deleted_with_wildcard(self):
     """Test for 'rm -r' of a folder with a dir_$folder$ marker."""
     bucket_uri = self.CreateVersionedBucket()
-    key_uri = bucket_uri.clone_replace_name('abc/o1')
-    key_uri.set_contents_from_string('foobar')
-    folder_uri = bucket_uri.clone_replace_name('abc_$folder$')
-    folder_uri.set_contents_from_string('')
+    key_uri = self.StorageUriCloneReplaceName(bucket_uri, 'abc/o1')
+    self.StorageUriSetContentsFromString(key_uri, 'foobar')
+    folder_uri = self.StorageUriCloneReplaceName(bucket_uri, 'abc_$folder$')
+    self.StorageUriSetContentsFromString(folder_uri, '')
+
+    if self.multiregional_buckets:
+      self.AssertNObjectsInBucket(bucket_uri, 2, versioned=True)
+    self._RunRemoveCommandAndCheck(
+        ['rm', '-r', '%s' % suri(bucket_uri, '*')],
+        objects_to_remove=[
+            '%s#%s' % (suri(key_uri), urigen(key_uri)),
+            '%s#%s' % (suri(folder_uri), urigen(folder_uri))
+        ])
+    self.AssertNObjectsInBucket(bucket_uri, 0, versioned=True)
+    # Bucket should not be deleted (Should not get ServiceException).
+    bucket_uri.get_location(validate=False)
+
+  def test_folder_objects_deleted_with_double_wildcard(self):
+    """Test for 'rm -r' of a folder with a dir_$folder$ marker."""
+    bucket_uri = self.CreateVersionedBucket()
+    key_uri = self.StorageUriCloneReplaceName(bucket_uri, 'abc/o1')
+    self.StorageUriSetContentsFromString(key_uri, 'foobar')
+    folder_uri = self.StorageUriCloneReplaceName(bucket_uri, 'abc_$folder$')
+    self.StorageUriSetContentsFromString(folder_uri, '')
 
     if self.multiregional_buckets:
       self.AssertNObjectsInBucket(bucket_uri, 2, versioned=True)
@@ -420,7 +495,8 @@ class TestRm(testcase.GsUtilIntegrationTestCase):
       # Bucket should be deleted.
       stderr = self.RunGsUtil(['ls', '-Lb', suri(bucket_uri)],
                               return_stderr=True,
-                              expected_status=1)
+                              expected_status=1,
+                              force_gsutil=True)
       self.assertIn('bucket does not exist', stderr)
 
     _Check1()
@@ -438,8 +514,9 @@ class TestRm(testcase.GsUtilIntegrationTestCase):
 
     stderr = self.RunGsUtil(['rb', suri(bucket_uri)],
                             return_stderr=True,
-                            expected_status=1)
-    self.assertIn('Bucket is not empty', stderr)
+                            expected_status=1,
+                            force_gsutil=True)
+    self.assertIn('not empty', stderr)
 
     # Now try with rm -r.
     @Retry(AssertionError, tries=3, timeout_secs=1)
@@ -448,7 +525,8 @@ class TestRm(testcase.GsUtilIntegrationTestCase):
       # Bucket should be deleted.
       stderr = self.RunGsUtil(['ls', '-Lb', suri(bucket_uri)],
                               return_stderr=True,
-                              expected_status=1)
+                              expected_status=1,
+                              force_gsutil=True)
       self.assertIn('bucket does not exist', stderr)
 
     _Check2()
@@ -492,11 +570,32 @@ class TestRm(testcase.GsUtilIntegrationTestCase):
     self._RunRemoveCommandAndCheck(['-q', 'rm', suri(key_uri)], [])
     self.AssertNObjectsInBucket(bucket_uri, 0)
 
-  def test_rm_object_with_slash(self):
-    """Tests removing a bucket that has an object with a slash in it."""
+  @SkipForS3('The boto lib used for S3 does not handle objects '
+             'starting with slashes if we use V4 signature')
+  def test_rm_object_with_prefix_slash(self):
+    """Tests removing a bucket that has an object starting with slash.
+
+    The boto lib used for S3 does not handle objects starting with slashes
+    if we use V4 signature. Hence we are testing objects with prefix
+    slashes separately.
+    """
     bucket_uri = self.CreateVersionedBucket()
     ouri1 = self.CreateObject(bucket_uri=bucket_uri,
                               object_name='/dirwithslash/foo',
+                              contents=b'z')
+    if self.multiregional_buckets:
+      self.AssertNObjectsInBucket(bucket_uri, 1, versioned=True)
+
+    self._RunRemoveCommandAndCheck(
+        ['rm', '-r', suri(bucket_uri)],
+        objects_to_remove=['%s#%s' % (suri(ouri1), urigen(ouri1))],
+        buckets_to_remove=[suri(bucket_uri)])
+
+  def test_rm_object_with_slashes(self):
+    """Tests removing a bucket that has objects with slashes."""
+    bucket_uri = self.CreateVersionedBucket()
+    ouri1 = self.CreateObject(bucket_uri=bucket_uri,
+                              object_name='h/e/l//lo',
                               contents=b'z')
     ouri2 = self.CreateObject(bucket_uri=bucket_uri,
                               object_name='dirnoslash/foo',
@@ -515,6 +614,8 @@ class TestRm(testcase.GsUtilIntegrationTestCase):
                                    ],
                                    buckets_to_remove=[suri(bucket_uri)])
 
+  @SkipForS3('The boto lib used for S3 does not handle objects '
+             'starting with slashes if we use V4 signature')
   def test_slasher_horror_film(self):
     """Tests removing a bucket with objects that are filled with slashes."""
     bucket_uri = self.CreateVersionedBucket()
@@ -579,8 +680,10 @@ class TestRm(testcase.GsUtilIntegrationTestCase):
          suri(object_uri)],
         return_stderr=True,
         expected_status=1)
-    self.assertRegex(
-        stderr, r'PreconditionException: 412 (Precondition)?\s*(Failed|None)')
+    if self._use_gcloud_storage:
+      self.assertRegex(stderr, r'pre-conditions you specified did not hold')
+    else:
+      self.assertRegex(stderr, r'PreconditionException: 412')
 
   def test_stdin_args(self):
     """Tests rm with the -I option."""
@@ -621,14 +724,65 @@ class TestRm(testcase.GsUtilIntegrationTestCase):
     ],
                             return_stderr=True,
                             expected_status=1)
-    self.assertIn('Encountered non-existent bucket', stderr)
+    if self._use_gcloud_storage:
+      # GCS and S3 responses.
+      self.assertTrue('not found: 404' in stderr or 'NoSuchBucket' in stderr)
+    else:
+      self.assertIn('Encountered non-existent bucket', stderr)
 
   def test_rm_multiple_nonexistent_objects(self):
     bucket_uri = self.CreateBucket()
     nonexistent_object1 = suri(bucket_uri, 'nonexistent1')
-    nonexistent_object2 = suri(bucket_uri, 'nonexistent1')
+    nonexistent_object2 = suri(bucket_uri, 'nonexistent2')
     stderr = self.RunGsUtil(
         ['rm', '-rf', nonexistent_object1, nonexistent_object2],
         return_stderr=True,
         expected_status=1)
-    self.assertIn('2 files/objects could not be removed.', stderr)
+    if self._use_gcloud_storage:
+      self.assertIn(
+          'The following URLs matched no objects or files:\n-{}\n-{}'.format(
+              nonexistent_object1, nonexistent_object2), stderr)
+    else:
+      self.assertIn('2 files/objects could not be removed.', stderr)
+
+
+class TestRmUnitTests(testcase.GsUtilUnitTestCase):
+  """Unit tests for gsutil rm."""
+
+  def test_shim_translates_flags(self):
+    bucket_uri = self.CreateBucket()
+    with SetBotoConfigForTest([('GSUtil', 'use_gcloud_storage', 'True'),
+                               ('GSUtil', 'hidden_shim_mode', 'dry_run')]):
+      with SetEnvironmentForTest({
+          'CLOUDSDK_CORE_PASS_CREDENTIALS_TO_GSUTIL': 'True',
+          'CLOUDSDK_ROOT_DIR': 'fake_dir',
+      }):
+        mock_log_handler = self.RunCommand(
+            'rm',
+            ['-r', '-R', '-a', '-f', suri(bucket_uri)],
+            return_log_handler=True)
+        info_lines = '\n'.join(mock_log_handler.messages['info'])
+        self.assertIn(
+            'Gcloud Storage Command: {} alpha storage rm'
+            ' -r -r -a --continue-on-error {}'.format(
+                os.path.join('fake_dir', 'bin', 'gcloud'), suri(bucket_uri)),
+            info_lines)
+
+  @mock.patch.object(sys, 'stdin')
+  def test_shim_translates_stdin_flag(self, mock_stdin):
+    bucket_uri = self.CreateBucket()
+    object_uri = self.CreateObject(bucket_uri, 'foo', 'abcd')
+    mock_stdin.__iter__.return_value = [suri(object_uri)]
+    with SetBotoConfigForTest([('GSUtil', 'use_gcloud_storage', 'True'),
+                               ('GSUtil', 'hidden_shim_mode', 'dry_run')]):
+      with SetEnvironmentForTest({
+          'CLOUDSDK_CORE_PASS_CREDENTIALS_TO_GSUTIL': 'True',
+          'CLOUDSDK_ROOT_DIR': 'fake_dir',
+      }):
+
+        mock_log_handler = self.RunCommand('rm', ['-I'],
+                                           return_log_handler=True)
+        info_lines = '\n'.join(mock_log_handler.messages['info'])
+        self.assertIn(
+            'Gcloud Storage Command: {} alpha storage rm'
+            ' -I'.format(os.path.join('fake_dir', 'bin', 'gcloud')), info_lines)

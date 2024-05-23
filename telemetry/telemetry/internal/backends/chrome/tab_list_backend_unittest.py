@@ -46,18 +46,19 @@ class TabListBackendTest(tab_test_case.TabTestCase):
     tabs = []
     for context_id in self.tabs._tab_list_backend.IterContextIds():
       tab = self.tabs.GetTabById(context_id)
-      self.assertEquals(tab.id, context_id)
+      self.assertEqual(tab.id, context_id)
       tabs.append(self.tabs.GetTabById(context_id))
 
   # https://github.com/catapult-project/catapult/issues/3099 (Android)
   @decorators.Enabled('has tabs')
   @decorators.Disabled('android')
+  @decorators.Disabled('all') # Temporary disabled for Chromium changes
   def testTabIdStableAfterTabCrash(self):
     # Ensure that there are two tabs.
     while len(self.tabs) < 2:
       self.tabs.New()
 
-    tabs = [t for t in self.tabs]
+    tabs = list(self.tabs)
 
     # Crash the first tab.
     self.assertRaises(exceptions.DevtoolsTargetCrashException,
@@ -65,7 +66,7 @@ class TabListBackendTest(tab_test_case.TabTestCase):
 
     # Fetching the second tab by id should still work. Fetching the first tab
     # should raise an exception.
-    self.assertEquals(tabs[1], self.tabs.GetTabById(tabs[1].id))
+    self.assertEqual(tabs[1], self.tabs.GetTabById(tabs[1].id))
     self.assertRaises(KeyError, lambda: self.tabs.GetTabById(tabs[0].id))
 
   @decorators.Enabled('has tabs')

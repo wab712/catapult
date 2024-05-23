@@ -184,7 +184,7 @@ found in the LICENSE file.
           </template>
           <template is="dom-if" if="{{!anomalies.length}}">
             <h2 class="center">All alerts triaged!</h2>
-            <iframe src="https://lorempixel.com/800/600/cats/" width="800" height="600"></iframe>
+            <iframe src="https://loremflickr.com/800/600/cats/" width="800" height="600"></iframe>
           </template>
         </div>
       </template>
@@ -276,7 +276,7 @@ Polymer({
       return;
     }
     const params = uri.getAllParameters();
-    const oldSheriff = params.sheriff || 'Chromium Perf Sheriff';
+    const oldSheriff = params.sheriff || '';
     if (oldSheriff === sheriff) {
       return;
     }
@@ -366,7 +366,7 @@ Polymer({
     this.sortBy = uri.getParameter('sortby', 'end_revision');
     this.sortDirection = uri.getParameter('sortdirection', 'down');
     this.selectedSheriffIndex = this.sheriffList.indexOf(
-        uri.getParameter('sheriff', 'Chromium Perf Sheriff'));
+        uri.getParameter('sheriff', ''));
     this.showingImprovements = uri.getParameter('improvements', false);
     this.showingTriaged = uri.getParameter('triaged', false);
   },
@@ -391,12 +391,13 @@ Polymer({
   },
 
   ready() {
-    this.sheriff = uri.getParameter('sheriff', 'Chromium Perf Sheriff');
+    this.sheriff = uri.getParameter('sheriff', null);
     this.showImprovements = uri.getParameter('improvements', false);
     this.showTriaged = uri.getParameter('triaged', false);
-    const params = {
-      'sheriff': this.sheriff
-    };
+    const params = {}
+    if (this.sheriff != null) {
+      params.sheriff = this.sheriff
+    }
     if (this.showImprovements) {
       params.improvements = true;
     }

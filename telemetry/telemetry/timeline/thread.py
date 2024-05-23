@@ -29,7 +29,7 @@ class Thread(event_container.TimelineEventContainer):
   The asynchronous slices are stored in an AsyncSliceGroup object.
   """
   def __init__(self, process, tid):
-    super(Thread, self).__init__('thread %s' % tid, parent=process)
+    super().__init__('thread %s' % tid, parent=process)
     self.tid = tid
     self._async_slices = []
     self._flow_events = []
@@ -93,7 +93,7 @@ class Thread(event_container.TimelineEventContainer):
           yield sample
 
   def AddSample(self, category, name, timestamp, args=None):
-    if len(self._samples) and timestamp < self._samples[-1].start:
+    if self._samples and timestamp < self._samples[-1].start:
       raise ValueError(
           'Samples must be added in increasing timestamp order')
     sample = sample_module.Sample(
@@ -142,7 +142,7 @@ class Thread(event_container.TimelineEventContainer):
 
     returns completed slice.
     """
-    if not len(self._open_slices):
+    if not self._open_slices:
       raise ValueError(
           'EndSlice called without an open slice')
     curr_slice = self._open_slices.pop()
@@ -153,7 +153,7 @@ class Thread(event_container.TimelineEventContainer):
     # On Windows, it is possible to have a value for |end_thread_timestamp|
     # but not for |curr_slice.thread_start|, because it takes some time to
     # initialize the thread time timer.
-    if curr_slice.thread_start != None and end_thread_timestamp != None:
+    if curr_slice.thread_start is not None and end_thread_timestamp is not None:
       curr_slice.thread_duration = (end_thread_timestamp -
                                     curr_slice.thread_start)
     curr_slice.did_not_finish = False
@@ -189,13 +189,13 @@ class Thread(event_container.TimelineEventContainer):
       if s.did_not_finish:
         s.duration = max_timestamp - s.start
         assert s.duration >= 0
-        if s.thread_start != None:
+        if s.thread_start is not None:
           s.thread_duration = max_thread_timestamp - s.thread_start
           assert s.thread_duration >= 0
     self._open_slices = []
 
   def IsTimestampValidForBeginOrEnd(self, timestamp):
-    if not len(self._open_slices):
+    if not self._open_slices:
       return True
     return timestamp >= self._open_slices[-1].start
 
@@ -242,7 +242,7 @@ class Thread(event_container.TimelineEventContainer):
 
     assert len(self._toplevel_slices) == 0
     assert len(self._all_slices) == 0
-    if not len(self._newly_added_slices):
+    if not self._newly_added_slices:
       return
 
     self._all_slices.extend(self._newly_added_slices)

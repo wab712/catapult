@@ -7,11 +7,16 @@ from __future__ import division
 from __future__ import absolute_import
 
 import json
+import mock
 
 from dashboard.pinpoint.models import job as job_module
 from dashboard.pinpoint import test
 
 
+@mock.patch('dashboard.services.swarming.GetAliveBotsByDimensions',
+            mock.MagicMock(return_value=["a"]))
+@mock.patch('dashboard.common.cloud_metric._PublishTSCloudMetric',
+            mock.MagicMock())
 class StatsTest(test.TestCase):
 
   def testPost_ValidRequest(self):

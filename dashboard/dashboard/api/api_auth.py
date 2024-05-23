@@ -7,6 +7,7 @@ from __future__ import division
 from __future__ import absolute_import
 
 import logging
+import six
 
 from google.appengine.api import oauth
 
@@ -37,7 +38,15 @@ OAUTH_CLIENT_ID_ALLOWLIST = [
     # allow accessing the APIs by authorized users that generate tokens via
     # luci-auth command.
     '446450136466-2hr92jrq8e6i4tnsa56b52vacp7t3936.apps.googleusercontent.com',
+    # This oauth client id will become default LUCI auth at some point.
+    # https://chromium-review.googlesource.com/c/infra/luci/luci-go/+/4004539.
+    '446450136466-mj75ourhccki9fffaq8bc1e50di315po.apps.googleusercontent.com',
 ]
+if utils.IsStagingEnvironment():
+  OAUTH_CLIENT_ID_ALLOWLIST = [
+      # Staging oauth client id for Pinpoint.
+      '22573382977-u263jlijs2uiio0uq7qm7vso3vuh7ec5.apps.googleusercontent.com'
+  ]
 
 
 class ApiAuthException(Exception):
@@ -47,26 +56,26 @@ class ApiAuthException(Exception):
 class OAuthError(ApiAuthException):
 
   def __init__(self):
-    super(OAuthError, self).__init__('User authentication error')
+    super().__init__('User authentication error')
 
 
 class NotLoggedInError(ApiAuthException):
 
   def __init__(self):
-    super(NotLoggedInError, self).__init__('User not authenticated')
+    super().__init__('User not authenticated')
 
 
 class InternalOnlyError(ApiAuthException):
 
   def __init__(self):
-    super(InternalOnlyError, self).__init__('User does not have access')
+    super().__init__('User does not have access')
 
 
 def Authorize():
   try:
     email = utils.GetEmail()
-  except oauth.OAuthRequestError:
-    raise OAuthError
+  except oauth.OAuthRequestError as e:
+    six.raise_from(OAuthError, e)
 
   if not email:
     raise NotLoggedInError
@@ -82,11 +91,11 @@ def Authorize():
         logging.error('OAuth client id %s for user %s not in allowlist',
                       client_id, email)
         raise OAuthError
-  except oauth.OAuthRequestError:
+  except oauth.OAuthRequestError as e:
     # Transient errors when checking the token result should result in HTTP 500,
     # so catch oauth.OAuthRequestError here, not oauth.Error (which would catch
     # both fatal and transient errors).
-    raise OAuthError
+    six.raise_from(OAuthError, e)
 
   logging.info('OAuth user logged in as: %s', email)
   if utils.IsInternalUser():

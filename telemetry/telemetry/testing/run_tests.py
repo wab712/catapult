@@ -42,7 +42,7 @@ class RunTestsCommand(command_line.OptparseCommand):
   xvfb_process = None
 
   def __init__(self):
-    super(RunTestsCommand, self).__init__()
+    super().__init__()
     self.stream = sys.stdout
 
   @classmethod
@@ -56,9 +56,10 @@ class RunTestsCommand(command_line.OptparseCommand):
   def AddCommandLineArgs(cls, parser, _):
     parser.add_option('--start-xvfb', action='store_true',
                       default=False, help='Start Xvfb display if needed.')
-    parser.add_option('--disable-cloud-storage-io', action='store_true',
-                      default=False, help=('Disable cloud storage IO when '
-                                           'tests are run in parallel.'))
+    parser.add_option(
+        '--disable-cloud-storage-io',
+        action='store_true', default=False,
+        help=('Disable cloud storage IO.'))
     parser.add_option('--no-browser', action='store_true', default=False,
                       help='Don\'t require an actual browser to run the tests.')
     parser.add_option('-d', '--also-run-disabled-tests',
@@ -69,6 +70,8 @@ class RunTestsCommand(command_line.OptparseCommand):
                       action='append', default=[])
     parser.add_option('--disable-logging-config', action='store_true',
                       default=False, help='Configure logging (default on)')
+    parser.add_option('--use-persistent-shell', action='store_true',
+                      help='Uses a persistent shell adb connection when set.')
     parser.add_option('-v', '--verbose', action='count', dest='verbosity',
                       help='Increase verbosity level (repeat as needed)')
 
@@ -146,6 +149,10 @@ class RunTestsCommand(command_line.OptparseCommand):
       runner.host.stdout = self.stream
     if hasattr(args, 'disable_resultsink'):
       runner.args.disable_resultsink = args.disable_resultsink
+    if hasattr(args, 'rdb_content_output_file'):
+      runner.args.rdb_content_output_file = args.rdb_content_output_file
+    if hasattr(args, 'use_global_pool'):
+      runner.args.use_global_pool = args.use_global_pool
 
     if args.no_browser:
       possible_browser = None
@@ -182,6 +189,7 @@ class RunTestsCommand(command_line.OptparseCommand):
       runner.args.jobs = max(int(args.jobs) // 4, 1)
     else:
       runner.args.jobs = max(int(args.jobs) // 2, 1)
+    runner.args.stable_jobs = args.stable_jobs
     runner.args.expectations_files = args.expectations_files
     runner.args.tags = args.tags
     runner.args.skip = args.skip
@@ -264,17 +272,13 @@ def GetClassifier(typ_runner, possible_browser):
 
   if possible_browser:
     return ClassifyTestWithBrowser
-  else:
-    return ClassifyTestWithoutBrowser
+  return ClassifyTestWithoutBrowser
 
 
 def _SetUpProcess(child, context): # pylint: disable=unused-argument
   ps_util.EnableListingStrayProcessesUponExitHook()
-  # Make sure that we don't invokes cloud storage I/Os when we run the tests in
-  # parallel.
-  # TODO(https://github.com/catapult-project/catapult/issues/2192): always do
-  # this once telemetry tests in Chromium is updated to prefetch files.
   args = context
+  # Make sure that we don't invoke cloud storage I/Os
   if args.disable_cloud_storage_io:
     os.environ[cloud_storage.DISABLE_CLOUD_STORAGE_IO] = '1'
   if binary_manager.NeedsInit():

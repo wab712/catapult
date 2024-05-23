@@ -7,7 +7,7 @@ from __future__ import absolute_import
 import logging
 import time
 import six
-import six.moves.urllib.parse # pylint: disable=import-error
+import six.moves.urllib.parse # pylint: disable=import-error,wrong-import-order
 from six.moves import input # pylint: disable=redefined-builtin
 
 from telemetry.core import exceptions
@@ -49,10 +49,7 @@ _MEMORY_DUMP_WAIT_TIME = 3
 _GARBAGE_COLLECTION_PROPAGATION_TIME = 6
 
 
-if six.PY2:
-  ActionRunnerBase = object
-else:
-  ActionRunnerBase = six.with_metaclass(trace_event.TracedMetaClass, object)
+ActionRunnerBase = six.with_metaclass(trace_event.TracedMetaClass, object)
 
 class ActionRunner(ActionRunnerBase):
 
@@ -167,7 +164,7 @@ class ActionRunner(ActionRunnerBase):
     if deterministic_mode:
       self.Wait(_MEMORY_DUMP_WAIT_TIME)
       self.ForceGarbageCollection()
-    dump_id = self.tab.browser.DumpMemory()
+    dump_id = self.tab.browser.DumpMemory(deterministic=deterministic_mode)
     if not dump_id:
       raise exceptions.StoryActionError('Unable to obtain memory dump')
     return dump_id
@@ -197,7 +194,14 @@ class ActionRunner(ActionRunnerBase):
 
   def NavigateBack(self):
     """ Navigate back to the previous page."""
-    self.ExecuteJavaScript('window.history.back()')
+    try:
+      self.ExecuteJavaScript('window.history.back()')
+    except exceptions.DevtoolsTargetClosedException:
+      # Navigating back may immediately destroy the renderer, which devtools
+      # communicates via a message that results in a
+      # DevtoolsTargetClosedException. Continue on as this likely means the
+      # navigation was successful.
+      logging.warning('devtools closed navigating back, continuing')
 
   def WaitForNavigate(
       self, timeout_in_seconds_seconds=page_action.DEFAULT_TIMEOUT):
@@ -855,7 +859,7 @@ class ActionRunner(ActionRunnerBase):
     self._tab.StopMobileDeviceEmulation(timeout)
 
 
-class Interaction(object):
+class Interaction():
 
   def __init__(self, action_runner, label, flags):
     assert action_runner

@@ -37,10 +37,14 @@ _SUB_DIR2 = "sub2"
 class DeviceUtilsPushDeleteFilesTest(device_test_case.DeviceTestCase):
   def setUp(self):
     super(DeviceUtilsPushDeleteFilesTest, self).setUp()
-    self.adb = adb_wrapper.AdbWrapper(self.serial)
+    self.adb = adb_wrapper.AdbWrapper(self.serial, persistent_shell=True)
     self.adb.WaitForDevice()
     self.device = device_utils.DeviceUtils(
         self.adb, default_timeout=10, default_retries=0)
+
+  def tearDown(self):
+    super(DeviceUtilsPushDeleteFilesTest, self).tearDown()
+    self.adb.KillAllPersistentAdbs()
 
   @staticmethod
   def _MakeTempFile(contents):
@@ -256,6 +260,10 @@ class DeviceUtilsPushDeleteFilesTest(device_test_case.DeviceTestCase):
         return next(p.pid for p in self.device.ListProcesses('adbd'))
       except StopIteration:
         self.fail('Unable to find adbd')
+        # Pylint isn't able to tell that self.fail effectively returns this test
+        # Adding an unreachable None to make sure there is a return for every
+        # control flow in this method
+        return None
 
     old_adbd_pid = get_adbd_pid()
     self.device.RestartAdbd()

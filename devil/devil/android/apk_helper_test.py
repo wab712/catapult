@@ -134,6 +134,16 @@ _NO_NAMESPACE_MANIFEST_DUMP = """E: manifest (line=1)
     A: http://schemas.android.com/apk/res/android:targetPackage(0x01010021)="org.chromium.random_package" (Raw:"org.chromium.random_pacakge")
 """
 
+_STATIC_LIBRARY_DUMP = """N: android=http://schemas.android.com/apk/res/android
+  E: manifest (line=1)
+    A: android:versionCode(0x0101021b)=(type 0x10)0x210cffc7
+    A: package="com.google.android.trichromelibrary.debug" (Raw: "com.google.android.trichromelibrary.debug")
+    E: application (line=9)
+      E: static-library (line=10)
+        A: android:name(0x01010003)="com.google.android.trichromelibrary.debug" (Raw: "com.google.android.trichromelibrary.debug")
+        A: android:version(0x01010519)=(type 0x10)0x210cffc3
+"""
+
 # pylint: enable=line-too-long
 
 
@@ -176,9 +186,32 @@ class ApkHelperTest(mock_calls.TestCase):
     apk = apk_helper.ToHelper('abc.apks')
     self.assertTrue(isinstance(apk, apk_helper.ApksHelper))
 
+  def testToHelperApex(self):
+    apex = apk_helper.ToHelper('abc.apex')
+    self.assertTrue(isinstance(apex, apk_helper.ApexHelper))
+
   def testToHelperBundleScript(self):
     apk = apk_helper.ToHelper('abc_bundle')
     self.assertTrue(isinstance(apk, apk_helper.BundleScriptHelper))
+
+  def testToHelperIncrementalApkFromApkHelper(self):
+    apk = apk_helper.ToIncrementalHelper(apk_helper.ApkHelper('abc.apk'))
+    self.assertTrue(isinstance(apk, apk_helper.IncrementalApkHelper))
+    self.assertEqual(apk.path, 'abc.apk')
+
+  def testToHelperIncrementalApkFromIncrementalApkHelper(self):
+    prev_apk = apk_helper.IncrementalApkHelper('abc.apk')
+    apk = apk_helper.ToIncrementalHelper(prev_apk)
+    self.assertIs(prev_apk, apk)
+
+  def testToHelperIncrementalApkFromPath(self):
+    apk = apk_helper.ToIncrementalHelper('abc.apk')
+    self.assertTrue(isinstance(apk, apk_helper.IncrementalApkHelper))
+
+  def testToHelperIncrementalException(self):
+    with self.assertRaises(apk_helper.ApkHelperError):
+      apk_helper.ToIncrementalHelper(
+          apk_helper.ToSplitHelper('abc.apk', ['a.apk', 'b.apk']))
 
   def testToHelperSplitApk(self):
     apk = apk_helper.ToSplitHelper('abc.apk', ['a.apk', 'b.apk'])
@@ -222,7 +255,7 @@ class ApkHelperTest(mock_calls.TestCase):
       helper = apk_helper.ApkHelper('')
       self.assertEqual(helper.GetPackageName(), 'org.chromium.abc')
 
-  def testGetPermssions(self):
+  def testGetPermissions(self):
     with _MockAaptDump(_MANIFEST_DUMP):
       helper = apk_helper.ApkHelper('')
       all_permissions = helper.GetPermissions()
@@ -276,6 +309,16 @@ class ApkHelperTest(mock_calls.TestCase):
       self.assertEqual([('name1', 'value1'), ('name2', 'value2')],
                        helper.GetAllMetadata())
 
+  def testGetLibraryVersion(self):
+    with _MockAaptDump(_STATIC_LIBRARY_DUMP):
+      helper = apk_helper.ApkHelper('')
+      self.assertEqual(554500035, helper.GetLibraryVersion())
+
+  def testGetLibraryVersion_normalApk(self):
+    with _MockAaptDump(_MANIFEST_DUMP):
+      helper = apk_helper.ApkHelper('')
+      self.assertEqual(None, helper.GetLibraryVersion())
+
   def testGetVersionCode(self):
     with _MockAaptDump(_MANIFEST_DUMP):
       helper = apk_helper.ApkHelper('')
@@ -311,6 +354,12 @@ class ApkHelperTest(mock_calls.TestCase):
       helper = apk_helper.ApkHelper('')
       self.assertEqual('org.chromium.RandomTestRunner',
                        helper.GetInstrumentationName())
+
+  def testSetExtraApkPaths(self):
+    apk = apk_helper.ToIncrementalHelper('abc.apk')
+    apk.SetExtraApkPaths(['extra.apk'])
+    with apk.GetApkPaths(_MockDeviceUtils()) as apk_paths:
+      self.assertEqual(apk_paths, ['abc.apk', 'extra.apk'])
 
   def testGetArchitectures(self):
     AbiPair = collections.namedtuple('AbiPair', ['abi32bit', 'abi64bit'])

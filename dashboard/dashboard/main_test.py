@@ -6,9 +6,9 @@ from __future__ import print_function
 from __future__ import division
 from __future__ import absolute_import
 
+from flask import Flask
 import unittest
-
-import webapp2
+import six
 import webtest
 
 from dashboard import main
@@ -16,17 +16,23 @@ from dashboard.common import testing_common
 from dashboard.common import utils
 from dashboard.models import anomaly
 
+flask_app = Flask(__name__)
+
+
+@flask_app.route('/')
+def MainHandlerGet():
+  return main.MainHandlerGet()
+
 
 class MainTest(testing_common.TestCase):
 
   def setUp(self):
-    super(MainTest, self).setUp()
-    app = webapp2.WSGIApplication([('/', main.MainHandler)])
-    self.testapp = webtest.TestApp(app)
+    super().setUp()
+    self.testapp = webtest.TestApp(flask_app)
 
   def testGet_PageIsShown(self):
     response = self.testapp.get('/')
-    self.assertIn('<html>', response.body)
+    self.assertIn(b'<html>', response.body)
 
   def testGetColorClass(self):
     self.assertEqual('over-50', main._GetColorClass(95))
@@ -56,8 +62,9 @@ class MainTest(testing_common.TestCase):
         'start_revision': 14999,
         'end_revision': 15000,
         'key': anomaly_key.urlsafe(),
-        'dashboard_link': ('https://chromeperf.appspot.com'
-                           '/group_report?keys=%s' % anomaly_key.urlsafe()),
+        'dashboard_link':
+            ('https://chromeperf.appspot.com'
+             '/group_report?keys=%s' % six.ensure_str(anomaly_key.urlsafe())),
         'percent_changed': '100.0%',
         'color_class': 'over-50',
         'improvement': False,

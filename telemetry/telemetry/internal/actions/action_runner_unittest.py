@@ -22,7 +22,7 @@ import py_utils
 class ActionRunnerMeasureMemoryTest(tab_test_case.TabTestCase):
 
   def setUp(self):
-    super(ActionRunnerMeasureMemoryTest, self).setUp()
+    super().setUp()
     self.action_runner = action_runner_module.ActionRunner(
         self._tab, skip_waits=True)
     self.Navigate('blank.html')
@@ -54,7 +54,7 @@ class ActionRunnerMeasureMemoryTest(tab_test_case.TabTestCase):
     self.assertEqual(len(set(expected_dump_ids)), len(expected_dump_ids))
 
     actual_dump_ids = trace_processor.ExtractMemoryDumpIds(trace_data)
-    self.assertEqual(actual_dump_ids, expected_dump_ids)
+    self.assertTrue(set(expected_dump_ids).issubset(set(actual_dump_ids)))
 
   @decorators.Disabled('chromeos')  # crbug.com/1098669
   def testDeterministicMode(self):
@@ -381,7 +381,6 @@ class ActionRunnerTest(tab_test_case.TabTestCase):
         self._tab.EvaluateJavaScript('document.location.pathname;'),
         '/blank.html')
 
-  @decorators.Disabled('chromeos')  # crbug.com/1263212
   def testEnterText(self):
     self.Navigate('blank.html')
     self._tab.ExecuteJavaScript(

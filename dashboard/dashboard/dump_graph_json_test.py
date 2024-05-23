@@ -6,10 +6,10 @@ from __future__ import print_function
 from __future__ import division
 from __future__ import absolute_import
 
+from flask import Flask
 import json
 import unittest
-
-import webapp2
+import six
 import webtest
 
 from google.appengine.ext import ndb
@@ -21,14 +21,21 @@ from dashboard.models import anomaly
 from dashboard.models import graph_data
 from dashboard.models.subscription import Subscription
 
+flask_app = Flask(__name__)
 
+
+@flask_app.route('/dump_graph_json', methods=['GET'])
+def DumpGraphJsonHandler():
+  return dump_graph_json.DumpGraphJsonHandlerGet()
+
+
+@unittest.skipIf(six.PY3,
+                 'Testing endpoint for dev_appserver only in Python 2.')
 class DumpGraphJsonTest(testing_common.TestCase):
 
   def setUp(self):
-    super(DumpGraphJsonTest, self).setUp()
-    app = webapp2.WSGIApplication([('/dump_graph_json',
-                                    dump_graph_json.DumpGraphJsonHandler)])
-    self.testapp = webtest.TestApp(app)
+    super().setUp()
+    self.testapp = webtest.TestApp(flask_app)
 
   def testGet_DumpJson_Basic(self):
     # Insert a test with no rows or alerts.
@@ -71,8 +78,8 @@ class DumpGraphJsonTest(testing_common.TestCase):
     out_rows = _EntitiesOfKind(entities, 'Row')
     expected_num_rows = dump_graph_json._DEFAULT_MAX_POINTS
     self.assertEqual(expected_num_rows, len(out_rows))
-    expected_rev_range = range(highest_rev, highest_rev + 1 - expected_num_rows,
-                               -1)
+    expected_rev_range = list(
+        range(highest_rev, highest_rev + 1 - expected_num_rows, -1))
     for expected_rev, row in zip(expected_rev_range, out_rows):
       self.assertEqual(expected_rev, row.revision)
       self.assertEqual(expected_rev * 2, row.value)
@@ -100,7 +107,7 @@ class DumpGraphJsonTest(testing_common.TestCase):
         map(dump_graph_json.BinaryProtobufToEntity, protobuf_strings))
     out_rows = _EntitiesOfKind(entities, 'Row')
     rev_nums = [row.revision for row in out_rows]
-    expected_rev_range = range(highest_rev, highest_rev - 4, -1)
+    expected_rev_range = list(range(highest_rev, highest_rev - 4, -1))
     self.assertEqual(expected_rev_range, rev_nums)
 
   def testDumpJsonWithAlertData(self):

@@ -22,7 +22,9 @@ from __future__ import unicode_literals
 import os
 import re
 import stat
+import sys
 
+from gslib.exception import CommandException
 from gslib.exception import InvalidUrlError
 from gslib.utils import system_util
 from gslib.utils import text_util
@@ -42,6 +44,8 @@ S3_VERSION_REGEX = re.compile(r'(?P<object>.+)#(?P<version_id>.+)$')
 FILE_OBJECT_REGEX = re.compile(r'([^:]*://)(?P<filepath>.*)')
 # Regex to determine if a string contains any wildcards.
 WILDCARD_REGEX = re.compile(r'[*?\[\]]')
+
+RELATIVE_PATH_SYMBOLS = frozenset(['.', '..'])
 
 
 class StorageUrl(object):
@@ -101,6 +105,28 @@ class StorageUrl(object):
     """
     raise NotImplementedError('CreatePrefixUrl not overridden')
 
+  def _WarnIfUnsupportedDoubleWildcard(self):
+    """Warn if ** use may lead to undefined results."""
+    # Accepted 'url_string' values with '**', where '^' = start, and '$' = end.
+    # - ^**$
+    # - ^**/
+    # - /**$
+    # - /**/
+    if not self.object_name:
+      return
+    delimiter_bounded_url = self.delim + self.object_name + self.delim
+    split_url = delimiter_bounded_url.split(
+        '{delim}**{delim}'.format(delim=self.delim))
+    removed_correct_double_wildcards_url_string = ''.join(split_url)
+    if '**' in removed_correct_double_wildcards_url_string:
+      # Found a center '**' not in the format '/**/'.
+      # Not using logger.warning b/c it's too much overhead to pass the logger
+      # object to every StorageUrl.
+      sys.stderr.write(
+          '** behavior is undefined if directly preceeded or followed by'
+          ' with characters other than / in the cloud and {} locally.'.format(
+              os.sep))
+
   @property
   def url_string(self):
     raise NotImplementedError('url_string not overridden')
@@ -146,6 +172,8 @@ class _FileUrl(StorageUrl):
     self.generation = None
     self.is_stream = is_stream
     self.is_fifo = is_fifo
+
+    self._WarnIfUnsupportedDoubleWildcard()
 
   def Clone(self):
     return _FileUrl(self.url_string)
@@ -228,6 +256,13 @@ class _CloudUrl(StorageUrl):
         raise InvalidUrlError(
             'CloudUrl: URL string %s did not match URL regex' % url_string)
 
+    if url_string[(len(self.scheme) + len('://')):].startswith(self.delim):
+      raise InvalidUrlError(
+          'Cloud URL scheme should be followed by colon and two slashes: "://".'
+          ' Found: "{}"'.format(url_string))
+
+    self._WarnIfUnsupportedDoubleWildcard()
+
   def Clone(self):
     return _CloudUrl(self.url_string)
 
@@ -284,7 +319,7 @@ class _CloudUrl(StorageUrl):
     return self.url_string
 
 
-def _GetSchemeFromUrlString(url_str):
+def GetSchemeFromUrlString(url_str):
   """Returns scheme component of a URL string."""
 
   end_scheme_idx = url_str.find('://')
@@ -293,6 +328,10 @@ def _GetSchemeFromUrlString(url_str):
     return 'file'
   else:
     return url_str[0:end_scheme_idx].lower()
+
+
+def IsKnownUrlScheme(scheme_str):
+  return scheme_str in ('file', 's3', 'gs')
 
 
 def _GetPathFromUrlString(url_str):
@@ -403,15 +442,15 @@ def IsCloudSubdirPlaceholder(url, blr=None):
 def IsFileUrlString(url_str):
   """Returns whether a string is a file URL."""
 
-  return _GetSchemeFromUrlString(url_str) == 'file'
+  return GetSchemeFromUrlString(url_str) == 'file'
 
 
 def StorageUrlFromString(url_str):
   """Static factory function for creating a StorageUrl from a string."""
 
-  scheme = _GetSchemeFromUrlString(url_str)
+  scheme = GetSchemeFromUrlString(url_str)
 
-  if scheme not in ('file', 's3', 'gs'):
+  if not IsKnownUrlScheme(scheme):
     raise InvalidUrlError('Unrecognized scheme "%s"' % scheme)
   if scheme == 'file':
     path = _GetPathFromUrlString(url_str)
@@ -451,3 +490,25 @@ def UrlsAreForSingleProvider(url_args):
     elif url.scheme != provider:
       return False
   return provider is not None
+
+
+def UrlsAreMixOfBucketsAndObjects(urls):
+  """Tests whether the URLs are a mix of buckets and objects.
+
+  Args:
+    url_args: (Iterable[gslib.storage_url.StorageUrl]) Collection of URLs to
+    check.
+
+  Returns:
+    True if URLs are a mix of buckets and objects. False if URLs are all buckets
+    or all objects. None if invalid Cloud URLs are included.
+  """
+  if all(url.IsCloudUrl() for url in urls):
+    are_buckets = list(map(lambda x: x.IsBucket(), urls))
+    return any(are_buckets) and not all(are_buckets)
+
+
+def RaiseErrorIfUrlsAreMixOfBucketsAndObjects(urls, recursion_requested):
+  """Raises error if mix of buckets and objects adjusted for recursion."""
+  if UrlsAreMixOfBucketsAndObjects(urls) and not recursion_requested:
+    raise CommandException('Cannot operate on a mix of buckets and objects.')

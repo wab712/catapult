@@ -40,12 +40,17 @@ cron:
 
 - description: Restart pinpoint jobs that encounter failures
   url: /cron/refresh-jobs
-  schedule: every 30 minutes
+  schedule: every 15 minutes
   target: pinpoint
 
 - description: Purge Pinpoint's expired isolates from datastore.
   url: /cron/isolate-cleanup
   schedule: every 24 hours
+  target: pinpoint
+
+- description: Update sandwich verification results for Pinpoint's bisection culprits.
+  url: /cron/update-culprit-verification-results
+  schedule: every 10 minutes
   target: pinpoint
 
 - description: Poll luci-config for sheriff configurations.

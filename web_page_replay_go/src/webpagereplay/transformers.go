@@ -21,6 +21,8 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+
+	"github.com/google/brotli/go/cbrotli"
 )
 
 type readerWithError struct {
@@ -114,6 +116,7 @@ func DecompressResponse(resp *http.Response) error {
 		if err != nil {
 			return err
 		}
+		resp.ContentLength = int64(len(body))
 		resp.Body = ioutil.NopCloser(bytes.NewReader(body))
 	}
 	return nil
@@ -132,7 +135,8 @@ func decompressBody(ce string, compressed []byte) ([]byte, error) {
 		}
 	case "deflate":
 		r = flate.NewReader(bytes.NewReader(compressed))
-	// TODO(catapult:3742): Implement Brotli support.
+	case "br":
+		r = cbrotli.NewReader(bytes.NewReader(compressed))
 	default:
 		// Unknown compression type or uncompressed.
 		return compressed, errors.New("unknown compression: " + ce)
@@ -156,6 +160,9 @@ func CompressBody(ae string, uncompressed []byte) ([]byte, string, error) {
 	case strings.Contains(ae, "deflate"):
 		w, _ = flate.NewWriter(&buf, flate.DefaultCompression) // never fails
 		outCE = "deflate"
+	case strings.Contains(ae, "br"):
+		w = cbrotli.NewWriter(&buf, cbrotli.WriterOptions{Quality: 5})
+		outCE = "br"
 	default:
 		// Unknown compression type or compression not allowed.
 		return uncompressed, "identity", errors.New("unknown compression: " + ae)
@@ -224,9 +231,19 @@ func getNonceTokenFromCSPHeaderScriptSrc(cspScriptSrc string) string {
 // Content-Security-Policy/script-src
 // https://developers.google.com/web/fundamentals/security/csp/
 func transformCSPHeader(header http.Header, injectedScriptSha256 string) {
-	csp := header.Get("Content-Security-Policy")
+	csps := header.Values("Content-Security-Policy")
+	for cspIndex, csp := range csps {
+		// Some sites will have more than one csp entry.
+		csps[cspIndex] = getUpdatedSingleCSPHeader(csp, injectedScriptSha256)
+	}
+}
+
+// getUpdatedSingleCSPHeader looks at an existing single csp string and updates
+// the script permissions if necessary. It always returns a csp string, only
+// altered when needed.
+func getUpdatedSingleCSPHeader(csp string, injectedScriptSha256 string) string {
 	if csp == "" {
-		return
+		return ""
 	}
 	// We prefer the 'script-src', but if it doesn't exist, we want to update a
 	// 'default-src' directive if it exists.
@@ -244,7 +261,7 @@ func transformCSPHeader(header http.Header, injectedScriptSha256 string) {
 	}
 	// No CSP policy to worry about updating.
 	if updateIndex < 0 {
-		return
+		return csp
 	}
 	updateDirective := directives[updateIndex]
 	if getNonceTokenFromCSPHeaderScriptSrc(updateDirective) != "" {
@@ -252,17 +269,17 @@ func transformCSPHeader(header http.Header, injectedScriptSha256 string) {
 		// transformCSPHeader does nothing.
 		// WPR will add the nonce token to any injected script to open the
 		// permission.
-		return
+		return csp
 	}
 	// Break the 'script-src' or 'default-src' directive into more tokens,
 	// and examine each token.
 	tokens := strings.Split(updateDirective, " ")
 	newDirective := ""
 	needsUnsafeInline := true
-
+	lookingForSha := true
 	for _, token := range tokens {
 		token = strings.TrimSpace(token)
-		// All keyword tokens ['unsafe-inline', 'none', 'nonce-...', 'sha...'']
+		// All keyword tokens ['unsafe-inline', 'none', 'nonce-...', 'sha...']
 		// are single-quote wrapped in the CSP headers.
 		if token == "'unsafe-inline'" {
 			needsUnsafeInline = false
@@ -274,8 +291,15 @@ func transformCSPHeader(header http.Header, injectedScriptSha256 string) {
 		if strings.HasPrefix(token, "'sha256-") ||
 			strings.HasPrefix(token, "'sha384-") ||
 			strings.HasPrefix(token, "'sha512-") {
-			newDirective += "'sha256-" + injectedScriptSha256 + "' "
+			// Only add the injected script the first time we are at a block of sha
+			// entries, otherwise we may repeat it several times.
+			if lookingForSha {
+				lookingForSha = false
+				newDirective += "'sha256-" + injectedScriptSha256 + "' "
+			}
 			needsUnsafeInline = false
+		} else {
+			lookingForSha = true
 		}
 		// Don't add back 'none' to our set, as if it is the only item it
 		// follows we will be adding 'unsafe-inline' below.
@@ -291,7 +315,7 @@ func transformCSPHeader(header http.Header, injectedScriptSha256 string) {
 
 	directives[updateIndex] = newDirective
 	newCsp := strings.Join(directives, ";")
-	header.Set("Content-Security-Policy", newCsp)
+	return newCsp
 }
 
 // ResponseTransformer is an interface for transforming HTTP responses.

@@ -12,20 +12,21 @@ from dashboard.common import request_handler
 from dashboard import revision_info_client
 
 
-class ChartHandler(request_handler.RequestHandler):
-  """Base class for requests which display a chart."""
+def RenderHtml(template_file, template_values, status=200):
+  """Fills in template values for pages that show charts."""
+  template_values.update(_GetChartValues())
+  template_values['revision_info'] = json.dumps(
+      template_values['revision_info'])
+  return request_handler.RequestHandlerRenderHtml(template_file,
+                                                  template_values, status)
 
-  def RenderHtml(self, template_file, template_values, status=200):
-    """Fills in template values for pages that show charts."""
-    template_values.update(self._GetChartValues())
-    template_values['revision_info'] = json.dumps(
-        template_values['revision_info'])
-    return super(ChartHandler, self).RenderHtml(template_file, template_values,
-                                                status)
 
-  def GetDynamicVariables(self, template_values, request_path=None):
-    template_values.update(self._GetChartValues())
-    super(ChartHandler, self).GetDynamicVariables(template_values, request_path)
+def GetDynamicVariables(template_values, request_path=None):
+  template_values['revision_info'] = \
+    revision_info_client.GetRevisionInfoConfig()
+  request_handler.RequestHandlerGetDynamicVariables(template_values,
+                                                    request_path)
 
-  def _GetChartValues(self):
-    return {'revision_info': revision_info_client.GetRevisionInfoConfig()}
+
+def _GetChartValues():
+  return {'revision_info': revision_info_client.GetRevisionInfoConfig()}

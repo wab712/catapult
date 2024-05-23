@@ -45,7 +45,7 @@ def get_config(options):
 
 class AndroidProcessDataAgent(tracing_agents.TracingAgent):
   def __init__(self):
-    super(AndroidProcessDataAgent, self).__init__()
+    super().__init__()
     self._trace_data = ""
     self._device = None
 

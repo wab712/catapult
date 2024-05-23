@@ -40,7 +40,6 @@ class PageAction(six.with_metaclass(trace_event.TracedMetaClass, object)):
   def WillRunAction(self, tab):
     """Override to do action-specific setup before
     Test.WillRunAction is called."""
-    pass
 
   def RunAction(self, tab):
     raise NotImplementedError()
@@ -57,7 +56,7 @@ class ElementPageAction(PageAction):
 
   def __init__(self, selector=None, text=None, element_function=None,
                timeout=DEFAULT_TIMEOUT):
-    super(ElementPageAction, self).__init__(timeout)
+    super().__init__(timeout)
     self._selector = selector
     self._text = text
     self._element_function = element_function
@@ -176,8 +175,7 @@ def EvaluateCallbackWithElement(
   if wait:
     tab.WaitForJavaScriptCondition(code, timeout=timeout_in_seconds)
     return True
-  else:
-    return tab.EvaluateJavaScript(code, user_gesture=user_gesture)
+  return tab.EvaluateJavaScript(code, user_gesture=user_gesture)
 
 
 @decorators.Cache

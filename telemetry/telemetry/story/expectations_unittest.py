@@ -12,12 +12,12 @@ from telemetry.story import expectations
 from telemetry.testing import fakes
 
 
-class MockState(object):
+class MockState():
   def __init__(self):
     self.platform = fakes.FakePlatform()
 
 
-class MockStory(object):
+class MockStory():
   def __init__(self, name):
     self._name = name
 
@@ -26,7 +26,7 @@ class MockStory(object):
     return self._name
 
 
-class MockStorySet(object):
+class MockStorySet():
   def __init__(self, stories):
     self._stories = stories
 
@@ -34,7 +34,7 @@ class MockStorySet(object):
   def stories(self):
     return self._stories
 
-class MockBrowserFinderOptions(object):
+class MockBrowserFinderOptions():
   def __init__(self):
     self._browser_type = None
 
@@ -448,7 +448,7 @@ class TestConditionTest(unittest.TestCase):
     self.assertTrue(
         expectations.WIN_7.ShouldDisable(
             self._platform, self._finder_options))
-    self.assertEquals('Win 7', str(expectations.WIN_7))
+    self.assertEqual('Win 7', str(expectations.WIN_7))
 
   def testWin10(self):
     self._platform.SetOSName('win')
@@ -456,7 +456,7 @@ class TestConditionTest(unittest.TestCase):
     self.assertTrue(
         expectations.WIN_10.ShouldDisable(
             self._platform, self._finder_options))
-    self.assertEquals('Win 10', str(expectations.WIN_10))
+    self.assertEqual('Win 10', str(expectations.WIN_10))
 
   def testAndroidGoWebviewFalseOnNotWebview(self):
     self._platform.SetOSName('android')

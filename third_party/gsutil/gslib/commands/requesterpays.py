@@ -28,13 +28,15 @@ from gslib.exception import NO_URLS_MATCHED_TARGET
 from gslib.help_provider import CreateHelpText
 from gslib.third_party.storage_apitools import storage_v1_messages as apitools_messages
 from gslib.utils.constants import NO_MAX
+from gslib.utils.shim_util import GcloudStorageFlag
+from gslib.utils.shim_util import GcloudStorageMap
 
 _SET_SYNOPSIS = """
-  gsutil requesterpays set <on|off> bucket_url...
+  gsutil requesterpays set (on|off) gs://<bucket_name>...
 """
 
 _GET_SYNOPSIS = """
-  gsutil requesterpays get bucket_url...
+  gsutil requesterpays get gs://<bucket_name>...
 """
 
 _SYNOPSIS = _SET_SYNOPSIS + _GET_SYNOPSIS.lstrip('\n')
@@ -42,21 +44,22 @@ _SYNOPSIS = _SET_SYNOPSIS + _GET_SYNOPSIS.lstrip('\n')
 _SET_DESCRIPTION = """
 <B>SET</B>
   The "set" sub-command requires an additional sub-command, either "on" or
-  "off", which, respectively, will enable or disable requester pays for the
-  specified bucket(s).
+  "off", which, respectively, will enable or disable Requester Pays for the
+  specified bucket.
 
 """
 
 _GET_DESCRIPTION = """
 <B>GET</B>
-  The "get" sub-command gets the requester pays configuration for a
+  The "get" sub-command gets the Requester Pays configuration for a
   bucket and displays whether or not it is enabled.
 """
 
 _DESCRIPTION = """
-  The Requester Pays Configuration feature enables you to configure a Google
-  Cloud Storage bucket to indicate that the requester will pay all costs
-  related to accessing the bucket and its objects.
+  The `Requester Pays
+  <https://cloud.google.com/storage/docs/requester-pays>`_ feature enables you
+  to configure a Google Cloud Storage bucket so that the requester
+  pays all costs related to accessing the bucket and its objects.
 
   The gsutil requesterpays command has two sub-commands:
 """ + _SET_DESCRIPTION + _GET_DESCRIPTION
@@ -105,6 +108,47 @@ class RequesterPaysCommand(Command):
           'get': _get_help_text,
           'set': _set_help_text,
       },
+  )
+
+  gcloud_storage_map = GcloudStorageMap(
+      gcloud_command={
+          'get':
+              GcloudStorageMap(
+                  gcloud_command=[
+                      'alpha', 'storage', 'buckets', 'list',
+                      '--format=value[separator=": "](name.sub("^", "gs://"),'
+                      'billing.requesterPays.yesno("Enabled", "Disabled"))'
+                  ],
+                  flag_map={},
+                  supports_output_translation=True,
+              ),
+          'set':
+              GcloudStorageMap(
+                  gcloud_command={
+                      'on':
+                          GcloudStorageMap(
+                              gcloud_command=[
+                                  'alpha', 'storage', 'buckets', 'update',
+                                  '--requester-pays'
+                              ],
+                              flag_map={},
+                          ),
+                      'off':
+                          GcloudStorageMap(
+                              gcloud_command=[
+                                  'alpha',
+                                  'storage',
+                                  'buckets',
+                                  'update',
+                                  '--no-requester-pays',
+                              ],
+                              flag_map={},
+                          ),
+                  },
+                  flag_map={},
+              )
+      },
+      flag_map={},
   )
 
   def _CalculateUrlsStartArg(self):

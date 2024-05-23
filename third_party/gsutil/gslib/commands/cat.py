@@ -30,6 +30,8 @@ from gslib.cs_api_map import ApiSelector
 from gslib.exception import CommandException
 from gslib.utils import cat_helper
 from gslib.utils import constants
+from gslib.utils.shim_util import GcloudStorageFlag
+from gslib.utils.shim_util import GcloudStorageMap
 
 if six.PY3:
   long = int
@@ -52,12 +54,10 @@ _DETAILED_HELP_TEXT = ("""
 
   (The final '-' causes gsutil to stream the output to stdout.)
 
-
-<B>WARNING: DATA INTEGRITY CHECKING NOT DONE</B>
-  The gsutil cat command does not compute a checksum of the downloaded data.
-  Therefore, we recommend that users either perform their own validation of the
-  output of gsutil cat or use gsutil cp or rsync (both of which perform
-  integrity checking automatically).
+  WARNING: The gsutil cat command does not compute a checksum of the
+  downloaded data. Therefore, we recommend that users either perform
+  their own validation of the output of gsutil cat or use gsutil cp
+  or rsync (both of which perform integrity checking automatically).
 
 
 <B>OPTIONS</B>
@@ -69,7 +69,7 @@ _DETAILED_HELP_TEXT = ("""
               of each text object that matched the wildcard.
 
   -r range    Causes gsutil to output just the specified byte range of the
-              object. Ranges are can be of these forms:
+              object. Ranges can be of these forms:
 
                 start-end (e.g., -r 256-5939)
                 start-    (e.g., -r 256-)
@@ -117,6 +117,14 @@ class CatCommand(Command):
       subcommand_help_text={},
   )
 
+  gcloud_storage_map = GcloudStorageMap(
+      gcloud_command=['alpha', 'storage', 'cat'],
+      flag_map={
+          '-h': GcloudStorageFlag('-d'),
+          '-r': GcloudStorageFlag('-r'),
+      },
+  )
+
   # Command entry point.
   def RunCommand(self):
     """Command entry point for the cat command."""
@@ -130,6 +138,10 @@ class CatCommand(Command):
           show_header = True
         elif o == '-r':
           request_range = a.strip()
+          # This if statement ensures the full object is returned
+          # instead of throwing a CommandException.
+          if request_range == '-':
+            continue
           range_matcher = re.compile(
               '^(?P<start>[0-9]+)-(?P<end>[0-9]*)$|^(?P<endslice>-[0-9]+)$')
           range_match = range_matcher.match(request_range)

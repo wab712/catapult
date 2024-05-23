@@ -7,10 +7,11 @@ from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
+from google.auth import app_engine
+
 
 class InternalServerError(Exception):
   """An error indicating that something unexpected happens."""
-  pass
 
 
 def GetSheriffConfigClient():
@@ -24,7 +25,7 @@ def GetSheriffConfigClient():
   return GetSheriffConfigClient._client
 
 
-class SheriffConfigClient(object):
+class SheriffConfigClient:
   """Wrapping of sheriff-config HTTP API."""
 
   _Subscription = None
@@ -34,10 +35,14 @@ class SheriffConfigClient(object):
     # Defer as many imports as possible until here, to ensure AppEngine
     # workarounds for protobuf import paths are fully installed.
     self._InitSession()
+    # pylint: disable=import-outside-toplevel
     from dashboard.common.utils import GetEmail
+    # pylint: disable=import-outside-toplevel
     from dashboard.models.subscription import Subscription, AnomalyConfig
+    # pylint: disable=import-outside-toplevel
     from google.protobuf import json_format
-    from dashboard import sheriff_config_pb2
+    # pylint: disable=import-outside-toplevel
+    from dashboard.protobuf import sheriff_config_pb2
     self._GetEmail = GetEmail  # pylint: disable=invalid-name
     SheriffConfigClient._Subscription = Subscription
     SheriffConfigClient._AnomalyConfig = AnomalyConfig
@@ -45,10 +50,11 @@ class SheriffConfigClient(object):
     self._sheriff_config_pb2 = sheriff_config_pb2
 
   def _InitSession(self):
-    import google.auth
+    # pylint: disable=import-outside-toplevel
     from google.auth import jwt
+    # pylint: disable=import-outside-toplevel
     from google.auth.transport.requests import AuthorizedSession
-    credentials, _ = google.auth.default(
+    credentials = app_engine.Credentials(
         scopes=['https://www.googleapis.com/auth/userinfo.email'])
     jwt_credentials = jwt.Credentials.from_signing_credentials(
         credentials, 'sheriff-config-dot-chromeperf.appspot.com')

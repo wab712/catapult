@@ -31,12 +31,12 @@ class TimelineModelUnittest(unittest.TestCase):
             "ph": "M"
         }])
     model = timeline_model.TimelineModel(trace)
-    self.assertEquals(5, model.browser_process.pid)
+    self.assertEqual(5, model.browser_process.pid)
 
 
 class TimelineModelIntegrationTests(tab_test_case.TabTestCase):
   def setUp(self):
-    super(TimelineModelIntegrationTests, self).setUp()
+    super().setUp()
     self.tracing_controller = self._browser.platform.tracing_controller
     self.config = tracing_config.TracingConfig()
     self.config.chrome_trace_config.SetLowOverheadFilter()

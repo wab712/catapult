@@ -14,14 +14,14 @@ ALLOWLIST = [
     revision_info_client.REVISION_INFO_KEY,
 ]
 
+from flask import request
 
-class ConfigHandler(api_request_handler.ApiRequestHandler):
+def _CheckUser():
+  pass
 
-  def _CheckUser(self):
-    pass
-
-  def Post(self):
-    key = self.request.get('key')
-    if key not in ALLOWLIST:
-      return
-    return namespaced_stored_object.Get(key)
+@api_request_handler.RequestHandlerDecoratorFactory(_CheckUser)
+def ConfigHandlerPost():
+  key = request.values.get('key')
+  if key not in ALLOWLIST:
+    return None
+  return namespaced_stored_object.Get(key)

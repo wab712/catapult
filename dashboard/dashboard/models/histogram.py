@@ -7,6 +7,7 @@ from __future__ import division
 from __future__ import absolute_import
 
 import collections
+import datetime
 import itertools
 import json
 import logging
@@ -18,6 +19,7 @@ from google.appengine.ext import ndb
 from dashboard.common import utils
 from dashboard.models import graph_data
 from dashboard.models import internal_only_model
+from dateutil.relativedelta import relativedelta
 from tracing.value.diagnostics import diagnostic as diagnostic_module
 
 
@@ -68,13 +70,8 @@ class HistogramRevisionRecord(ndb.Model):
 class ErrorTolerantJsonProperty(ndb.BlobProperty):
   # Adapted from
   # https://googleapis.dev/python/python-ndb/latest/_modules/google/cloud/ndb/model.html#JsonProperty
-  def __init__(
-      self,
-      compressed=None
-  ):
-    super(ErrorTolerantJsonProperty, self).__init__(
-        compressed=compressed
-    )
+  def __init__(self, compressed=None):
+    super().__init__(compressed=compressed)
 
   def _to_base_type(self, value):
     as_str = json.dumps(value, separators=(",", ":"), ensure_ascii=True)
@@ -105,6 +102,13 @@ class Histogram(JsonModel):
 
   # The time the histogram was added to the dashboard.
   timestamp = ndb.DateTimeProperty(auto_now_add=True, indexed=True)
+
+  @ndb.ComputedProperty
+  def expiry(self):  # pylint: disable=invalid-name
+    if self.timestamp:
+      return self.timestamp + relativedelta(years=3)
+
+    return datetime.datetime.utcnow() + relativedelta(years=3)
 
 def RemoveInvalidSparseDiagnostics(diagnostics):
   # Returns a list of SparseDiagnostics with invalid entries removed
@@ -404,7 +408,7 @@ def _FindOrInsertNamedDiagnosticsOutOfOrder(new_diagnostic, old_diagnostics,
       raise ndb.Return(guid_mapping)
 
     # Case 2, split the range.
-    elif rev > cur.start_revision and rev <= cur.end_revision:
+    if cur.start_revision < rev <= cur.end_revision:
       if not cur.IsDifferent(new_diagnostic):
         raise ndb.Return(guid_mapping)
 

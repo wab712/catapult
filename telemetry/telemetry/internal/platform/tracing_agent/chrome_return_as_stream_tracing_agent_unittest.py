@@ -20,9 +20,10 @@ from devil.android import device_utils
 class FakeAndroidPlatformBackend(
     chrome_tracing_agent_unittest.FakePlatformBackend):
   def __init__(self):
-    super(FakeAndroidPlatformBackend, self).__init__()
+    super().__init__()
     devices = device_utils.DeviceUtils.HealthyDevices(None)
     self.device = devices[0]
+    self.require_root = True
 
   def GetOSName(self):
     return 'android'
@@ -30,12 +31,12 @@ class FakeAndroidPlatformBackend(
 class FakeCrOSPlatformBackend(
     chrome_tracing_agent_unittest.FakePlatformBackend):
   def __init__(self):
-    super(FakeCrOSPlatformBackend, self).__init__()
-    remote = options_for_unittests.GetCopy().cros_remote
-    remote_ssh_port = options_for_unittests.GetCopy().cros_remote_ssh_port
+    super().__init__()
+    remote = options_for_unittests.GetCopy().remote
+    remote_ssh_port = options_for_unittests.GetCopy().remote_ssh_port
     self.cri = cros_interface.CrOSInterface(
         remote, remote_ssh_port,
-        options_for_unittests.GetCopy().cros_ssh_identity)
+        options_for_unittests.GetCopy().ssh_identity)
 
   def GetOSName(self):
     return 'chromeos'
@@ -65,6 +66,18 @@ class ChromeReturnAsStreamTracingAgentTest(unittest.TestCase):
     # robust to multiple file removal
     agent._RemoveTraceConfigFile()
     self.assertFalse(platform_backend.device.PathExists(config_file_path))
+    self.assertIsNone(agent.trace_config_file)
+
+  @decorators.Enabled('android')
+  def testCreateAndRemoveTraceConfigFileOnAndroidNoRoot(self):
+    platform_backend = FakeAndroidPlatformBackend()
+    platform_backend.require_root = False
+    config = tracing_config.TracingConfig()
+    agent = (chrome_return_as_stream_tracing_agent.
+             ChromeReturnAsStreamTracingAgent(platform_backend, config))
+    self.assertIsNone(agent.trace_config_file)
+
+    self.assertFalse(agent._CreateTraceConfigFile(config))
     self.assertIsNone(agent.trace_config_file)
 
   @decorators.Enabled('chromeos')

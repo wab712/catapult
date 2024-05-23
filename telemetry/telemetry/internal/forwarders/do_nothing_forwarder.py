@@ -8,17 +8,10 @@ from telemetry.internal import forwarders
 
 class Error(Exception):
   """Base class for exceptions in this module."""
-  pass
 
 
 class PortsMismatchError(Error):
   """Raised when local and remote ports are not equal."""
-  pass
-
-
-class ConnectionError(Error):
-  """Raised when unable to connect to local TCP ports."""
-  pass
 
 
 class DoNothingForwarderFactory(forwarders.ForwarderFactory):
@@ -39,7 +32,7 @@ class DoNothingForwarder(forwarders.Forwarder):
   """
 
   def __init__(self, local_port, remote_port):
-    super(DoNothingForwarder, self).__init__()
+    super().__init__()
     local_port, remote_port = _ValidatePorts(local_port, remote_port)
     self._StartedForwarding(local_port, remote_port)
 

@@ -23,7 +23,7 @@ from dashboard.models import graph_data
 class UtilsTest(testing_common.TestCase):
 
   def setUp(self):
-    super(UtilsTest, self).setUp()
+    super().setUp()
     testing_common.SetIsInternalUser('internal@chromium.org', True)
     testing_common.SetIsInternalUser('foo@chromium.org', False)
     testing_common.SetIsAdministrator('admin@chromium.org', True)
@@ -380,7 +380,7 @@ class UtilsTest(testing_common.TestCase):
     self.assertEqual('new_test', step)
 
   @mock.patch.object(utils, 'ServiceAccountHttp', mock.MagicMock())
-  @mock.patch('common.utils.discovery.build')
+  @mock.patch('apiclient.discovery.build')
   def testIsGroupMember_PositiveCase(self, mock_discovery_build):
     mock_request = mock.MagicMock()
     mock_request.execute = mock.MagicMock(return_value={'is_member': True})
@@ -393,14 +393,15 @@ class UtilsTest(testing_common.TestCase):
 
   @mock.patch.object(utils, 'ServiceAccountHttp', mock.MagicMock())
   @mock.patch('logging.error')
-  @mock.patch('common.utils.discovery.build')
+  @mock.patch('apiclient.discovery.build')
   def testIsGroupMember_RequestFails_LogsErrorAndReturnsFalse(
       self, mock_discovery_build, mock_logging_error):
     mock_service = mock.MagicMock()
     mock_service.membership = mock.MagicMock(
         return_value={'error': 'Some error'})
     mock_discovery_build.return_value = mock_service
-    self.assertFalse(utils.IsGroupMember('foo@bar.com', 'group'))
+    with self.assertRaises(utils.GroupMemberAuthFailed):
+      utils.IsGroupMember('foo@bar.com', 'group')
     self.assertEqual(1, mock_logging_error.call_count)
 
   def testGetSheriffForAutorollCommit_NotAutoroll_ReturnsNone(self):
@@ -453,6 +454,7 @@ class UtilsTest(testing_common.TestCase):
   def testIsNotAdministrator(self):
     self.assertFalse(utils.IsAdministrator())
 
+  @mock.patch.object(utils, 'IsGroupMember', mock.MagicMock(return_value=False))
   @mock.patch.object(utils, 'GetEmail',
                      mock.MagicMock(return_value='internal@chromium.org'))
   def testShouldTurnOnUploadCompletionTokenExperiment_NotGroupMember(self):
@@ -479,6 +481,22 @@ class UtilsTest(testing_common.TestCase):
   def testIsMonitored_Negative(self):
     sheriff_client = sheriff_config_client.GetSheriffConfigClient()
     self.assertFalse(utils.IsMonitored(sheriff_client, 'test'))
+
+
+  def testConvertBytesBeforeJsonDumps(self):
+    none_obj = None
+    self.assertEqual(None, utils.ConvertBytesBeforeJsonDumps(none_obj),
+                     'Fail converting none object')
+
+    dict_obj = {'a': b'aa', 'b': [b'bb', 'cc']}
+    self.assertEqual('{"a": "aa", "b": ["bb", "cc"]}',
+                     json.dumps(utils.ConvertBytesBeforeJsonDumps(dict_obj)),
+                     'Fail converting dict object')
+
+    list_obj = [{'a': b'aa', 'b': b'bb'}, {'c': b'cc'}]
+    self.assertEqual('[{"a": "aa", "b": "bb"}, {"c": "cc"}]',
+                     json.dumps(utils.ConvertBytesBeforeJsonDumps(list_obj)),
+                     'Fail converting list object')
 
 
 def _MakeMockFetch(base64_encoded=True, status=200):

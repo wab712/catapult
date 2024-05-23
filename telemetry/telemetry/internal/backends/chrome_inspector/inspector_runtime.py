@@ -10,7 +10,7 @@ from telemetry.core import exceptions
 # real evaluation errors (syntax error) from this recoverable DevTool error.
 TARGET_CLOSED_MESSAGE = "Inspected target navigated or closed"
 
-class InspectorRuntime(object):
+class InspectorRuntime():
   def __init__(self, inspector_websocket):
     self._inspector_websocket = inspector_websocket
     self._inspector_websocket.RegisterDomain('Runtime', self._OnNotification)
@@ -81,6 +81,14 @@ class InspectorRuntime(object):
       self._all_context_ids = set()
       self._inspector_websocket.SyncRequest({'method': 'Runtime.enable'},
                                             timeout=30)
+      # Disable capturing of stack traces for the inspector to minimize the
+      # performance impact of the inspector on the page (crbug/1280831).
+      self._inspector_websocket.SyncRequest({
+          'method': 'Runtime.setMaxCallStackSizeToCapture',
+          'params': {
+              'size': 0,
+          }
+      }, timeout=30)
     return self._all_context_ids
 
   def CrashRendererProcess(self, context_id, timeout):

@@ -27,9 +27,11 @@ from gslib.exception import CommandException
 from gslib.exception import NO_URLS_MATCHED_TARGET
 from gslib.storage_url import StorageUrlFromString
 from gslib.utils.constants import NO_MAX
+from gslib.utils.shim_util import GcloudStorageFlag
+from gslib.utils.shim_util import GcloudStorageMap
 
 _SYNOPSIS = """
-  gsutil rb [-f] url...
+  gsutil rb [-f] gs://<bucket_name>...
 """
 
 _DETAILED_HELP_TEXT = ("""
@@ -38,8 +40,7 @@ _DETAILED_HELP_TEXT = ("""
 
 
 <B>DESCRIPTION</B>
-  The rb command deletes a bucket. Buckets must be empty before you can delete
-  them.
+  Delete one or more buckets. Buckets must be empty before you can delete them.
 
   Be certain you want to delete a bucket before you do so, as once it is
   deleted the name becomes available and another user may create a bucket with
@@ -51,6 +52,8 @@ _DETAILED_HELP_TEXT = ("""
   -f          Continues silently (without printing error messages) despite
               errors when removing buckets. If some buckets couldn't be removed,
               gsutil's exit status will be non-zero even if this flag is set.
+              If no buckets could be removed, the command raises a
+              "no matches" error.
 """)
 
 
@@ -95,6 +98,13 @@ class RbCommand(Command):
       help_one_line_summary='Remove buckets',
       help_text=_DETAILED_HELP_TEXT,
       subcommand_help_text={},
+  )
+
+  gcloud_storage_map = GcloudStorageMap(
+      gcloud_command=['alpha', 'storage', 'buckets', 'delete'],
+      flag_map={
+          '-f': GcloudStorageFlag('--continue-on-error'),
+      },
   )
 
   def RunCommand(self):

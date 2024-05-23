@@ -19,7 +19,6 @@ from __future__ import print_function
 from __future__ import division
 from __future__ import unicode_literals
 
-from hashlib import md5
 import os
 import platform
 import re
@@ -34,6 +33,7 @@ from gslib.utils import system_util
 from gslib.utils.boto_util import GetFriendlyConfigFilePaths
 from gslib.utils.boto_util import UsingCrcmodExtension
 from gslib.utils.constants import UTF8
+from gslib.utils.hashing_helper import GetMd5
 from gslib.utils.parallelism_framework_util import CheckMultiprocessingAvailableAndInit
 
 _SYNOPSIS = """
@@ -117,7 +117,8 @@ class VersionCommand(Command):
           'gsutil path: {gsutil_path}\n'
           'compiled crcmod: {compiled_crcmod}\n'
           'installed via package manager: {is_package_install}\n'
-          'editable install: {is_editable_install}\n')
+          'editable install: {is_editable_install}\n'
+          'shim enabled: {is_shim_enabled}\n')
 
       sys.stdout.write(
           long_form_output.format(
@@ -136,7 +137,8 @@ class VersionCommand(Command):
               compiled_crcmod=UsingCrcmodExtension(),
               is_package_install=gslib.IS_PACKAGE_INSTALL,
               is_editable_install=gslib.IS_EDITABLE_INSTALL,
-          ))
+              is_shim_enabled=boto.config.getbool('GSUtil',
+                                                  'use_gcloud_storage', False)))
 
     return 0
 
@@ -153,7 +155,7 @@ class VersionCommand(Command):
     """
     if gslib.IS_PACKAGE_INSTALL:
       return 'PACKAGED_GSUTIL_INSTALLS_DO_NOT_HAVE_CHECKSUMS'
-    m = md5()
+    m = GetMd5()
     # Checksum gsutil and all .py files under gslib directory.
     files_to_checksum = [gslib.GSUTIL_PATH]
     for root, _, files in os.walk(gslib.GSLIB_DIR):

@@ -33,24 +33,24 @@ class TestGPUInfo(unittest.TestCase):
     info = gpu_info.GPUInfo.FromDict(data)
     self.assertTrue(len(info.devices) == 2)
     self.assertTrue(isinstance(info.devices[0], gpu_device.GPUDevice))
-    self.assertEquals(info.devices[0].vendor_id, 1000)
-    self.assertEquals(info.devices[0].device_id, 2000)
-    self.assertEquals(info.devices[0].vendor_string, 'a')
-    self.assertEquals(info.devices[0].device_string, 'b')
+    self.assertEqual(info.devices[0].vendor_id, 1000)
+    self.assertEqual(info.devices[0].device_id, 2000)
+    self.assertEqual(info.devices[0].vendor_string, 'a')
+    self.assertEqual(info.devices[0].device_string, 'b')
     self.assertTrue(isinstance(info.devices[1], gpu_device.GPUDevice))
-    self.assertEquals(info.devices[1].vendor_id, 3000)
-    self.assertEquals(info.devices[1].device_id, 4000)
-    self.assertEquals(info.devices[1].vendor_string, 'k')
-    self.assertEquals(info.devices[1].device_string, 'l')
-    self.assertEquals(info.aux_attributes['optimus'], False)
-    self.assertEquals(info.aux_attributes['amd_switchable'], False)
-    self.assertEquals(info.aux_attributes['driver_vendor'], 'c')
-    self.assertEquals(info.aux_attributes['driver_version'], 'd')
-    self.assertEquals(info.aux_attributes['driver_date'], 'e')
-    self.assertEquals(info.aux_attributes['gl_version_string'], 'g')
-    self.assertEquals(info.aux_attributes['gl_vendor'], 'h')
-    self.assertEquals(info.aux_attributes['gl_renderer'], 'i')
-    self.assertEquals(info.aux_attributes['gl_extensions'], 'j')
+    self.assertEqual(info.devices[1].vendor_id, 3000)
+    self.assertEqual(info.devices[1].device_id, 4000)
+    self.assertEqual(info.devices[1].vendor_string, 'k')
+    self.assertEqual(info.devices[1].device_string, 'l')
+    self.assertEqual(info.aux_attributes['optimus'], False)
+    self.assertEqual(info.aux_attributes['amd_switchable'], False)
+    self.assertEqual(info.aux_attributes['driver_vendor'], 'c')
+    self.assertEqual(info.aux_attributes['driver_version'], 'd')
+    self.assertEqual(info.aux_attributes['driver_date'], 'e')
+    self.assertEqual(info.aux_attributes['gl_version_string'], 'g')
+    self.assertEqual(info.aux_attributes['gl_vendor'], 'h')
+    self.assertEqual(info.aux_attributes['gl_renderer'], 'i')
+    self.assertEqual(info.aux_attributes['gl_extensions'], 'j')
 
   def testMissingAttrsFromDict(self):
     data = {
@@ -61,23 +61,13 @@ class TestGPUInfo(unittest.TestCase):
     for k in data:
       data_copy = data.copy()
       del data_copy[k]
-      try:
+      with self.assertRaises(KeyError):
         gpu_info.GPUInfo.FromDict(data_copy)
-        self.fail('Should raise exception if attribute "%s" is missing' % k)
-      except AssertionError:
-        raise
-      except KeyError:
-        pass
 
   def testMissingDevices(self):
     data = {
         'devices': []
     }
 
-    try:
+    with self.assertRaises(Exception):
       gpu_info.GPUInfo.FromDict(data)
-      self.fail('Should raise exception if devices array is empty')
-    except AssertionError:
-      raise
-    except Exception: # pylint: disable=broad-except
-      pass

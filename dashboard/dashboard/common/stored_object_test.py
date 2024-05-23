@@ -12,7 +12,7 @@ from dashboard.common import stored_object
 from dashboard.common import testing_common
 
 
-class SampleSerializableClass(object):
+class SampleSerializableClass:
 
   def __init__(self, data):
     self.data = data
@@ -25,6 +25,9 @@ class SampleSerializableClass(object):
 
   def __eq__(self, other):
     return self.__dict__ == other.__dict__
+
+  def __hash__(self):
+    return hash(self.data, self.user_name, self.user_id, self.family)
 
 
 class StoredObjectTest(testing_common.TestCase):

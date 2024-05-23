@@ -22,7 +22,7 @@ from telemetry.internal.browser import browser_finder
 from telemetry.internal.util import path
 
 
-class FakeResponse(object):
+class FakeResponse():
   def __init__(self):
     self.content = None
 
@@ -122,4 +122,4 @@ class JSONTransmissionTest(tab_test_case.TabTestCase):
     json_obj = [1] * 1000000
     snap_page_util._TransmitLargeJSONToTab(
         self._tab, json_obj, 'big_array')
-    self.assertEquals(self._tab.EvaluateJavaScript('big_array.length'), 1000000)
+    self.assertEqual(self._tab.EvaluateJavaScript('big_array.length'), 1000000)

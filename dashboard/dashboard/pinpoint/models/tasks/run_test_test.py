@@ -36,9 +36,11 @@ DIMENSIONS = [
 class EvaluatorTest(test.TestCase):
 
   def setUp(self):
-    super(EvaluatorTest, self).setUp()
+    super().setUp()
     self.maxDiff = None
-    self.job = job_module.Job.New((), ())
+    with mock.patch('dashboard.services.swarming.GetAliveBotsByDimensions',
+                    mock.MagicMock(return_value=["a"])):
+      self.job = job_module.Job.New((), ())
     task_module.PopulateTaskGraph(
         self.job,
         run_test.CreateGraph(
@@ -518,10 +520,12 @@ AttributeError: 'Namespace' object has no attribute 'benchmark_names'"""
     self.skipTest('Deferring implementation pending design.')
 
 
+@mock.patch('dashboard.services.swarming.GetAliveBotsByDimensions',
+            mock.MagicMock(return_value=["a"]))
 class ValidatorTest(test.TestCase):
 
   def setUp(self):
-    super(ValidatorTest, self).setUp()
+    super().setUp()
     self.maxDiff = None
 
   def testMissingDependency(self):

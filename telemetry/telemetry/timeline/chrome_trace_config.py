@@ -48,13 +48,12 @@ def _ConvertDictKeysToCamelCaseRecursively(data):
     return {_ConvertStringToCamelCase(k):
             _ConvertDictKeysToCamelCaseRecursively(v)
             for k, v in six.iteritems(data)}
-  elif isinstance(data, list):
+  if isinstance(data, list):
     return list(map(_ConvertDictKeysToCamelCaseRecursively, data))
-  else:
-    return data
+  return data
 
 
-class ChromeTraceConfig(object):
+class ChromeTraceConfig():
   """Stores configuration options specific to the Chrome tracing agent.
 
   This produces the trace config JSON string for tracing in Chrome.
@@ -180,7 +179,7 @@ class ChromeTraceConfig(object):
     return _ConvertDictKeysToCamelCaseRecursively(result)
 
 
-class MemoryDumpConfig(object):
+class MemoryDumpConfig():
   """Stores the triggers for memory dumps in ChromeTraceConfig."""
   def __init__(self):
     self._triggers = []

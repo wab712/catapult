@@ -30,6 +30,8 @@ _POSSIBLE_SYMBOL_BINARY_DIRECTORIES = [
 # The Breakpad processor architecture values are hex representations of the
 # values in MDCPUArchitecture from Breakpad's minidump_format.h.
 _BREAKPAD_ARCH_TO_FILE_REGEX = {
+    # 32-bit x86 (emulators).
+    '0x0': r'.*32-bit.*Intel.*',
     # 32-bit ARM.
     '0x5': r'.*32-bit.*ARM.*',
     # 64-bit ARM.
@@ -60,7 +62,7 @@ class AndroidMinidumpSymbolizer(minidump_symbolizer.MinidumpSymbolizer):
     # looking for symbol binaries (string).
     self._minidump_symbol_binaries_directories = {}
     # We use the OS/arch of the host, not the device.
-    super(AndroidMinidumpSymbolizer, self).__init__(
+    super().__init__(
         platform.system().lower(), platform.machine(), dump_finder, build_dir,
         symbols_dir=symbols_dir)
 
@@ -73,7 +75,7 @@ class AndroidMinidumpSymbolizer(minidump_symbolizer.MinidumpSymbolizer):
       logging.warning(
           'Cannot get Android stack traces without build directory.')
       return None
-    return super(AndroidMinidumpSymbolizer, self).SymbolizeMinidump(minidump)
+    return super().SymbolizeMinidump(minidump)
 
   def GetSymbolBinaries(self, minidump):
     """Returns a list of paths to binaries where symbols may be located.
@@ -180,8 +182,9 @@ class AndroidMinidumpSymbolizer(minidump_symbolizer.MinidumpSymbolizer):
         if f not in libraries:
           continue
         binary_path = os.path.join(possible_symbol_dir, f)
-        stdout = subprocess.check_output(
-            ['file', binary_path], stderr=subprocess.STDOUT)
+        stdout = six.ensure_str(
+            subprocess.check_output(
+                ['file', binary_path], stderr=subprocess.STDOUT))
         if matcher.match(stdout):
           symbol_dir = possible_symbol_dir
           break

@@ -19,9 +19,11 @@ from __future__ import print_function
 from __future__ import division
 from __future__ import unicode_literals
 
+import collections
 import datetime
 import logging
 import os
+import pyu2f
 from apitools.base.py import exceptions as apitools_exceptions
 
 from gslib.bucket_listing_ref import BucketListingObject
@@ -43,10 +45,12 @@ from gslib.tests.util import GSMockBucketStorageUri
 from gslib.tests.util import SetBotoConfigForTest
 from gslib.tests.util import unittest
 from gslib.third_party.storage_apitools import storage_v1_messages as apitools_messages
+from gslib.utils import copy_helper
 from gslib.utils import parallelism_framework_util
 from gslib.utils import posix_util
 from gslib.utils import system_util
 from gslib.utils import hashing_helper
+from gslib.utils.copy_helper import _CheckCloudHashes
 from gslib.utils.copy_helper import _DelegateUploadFileToObject
 from gslib.utils.copy_helper import _GetPartitionInfo
 from gslib.utils.copy_helper import _SelectUploadCompressionStrategy
@@ -58,6 +62,7 @@ from gslib.utils.copy_helper import PerformParallelUploadFileToObjectArgs
 from gslib.utils.copy_helper import WarnIfMvEarlyDeletionChargeApplies
 
 from six import add_move, MovedModule
+
 add_move(MovedModule('mock', 'mock', 'unittest.mock'))
 from six.moves import mock
 
@@ -113,8 +118,9 @@ class TestCpFuncs(GsUtilUnitTestCase):
     tracker_file = self.CreateTempFile(file_name='foo', contents=b'asdf')
     tracker_file_lock = parallelism_framework_util.CreateLock()
 
-    # dst_obj_metadata used for passing content-type.
-    empty_object = apitools_messages.Object()
+    # dst_obj_metadata used for passing content-type and storage class.
+    content_type = 'ContentType'
+    storage_class = 'StorageClass'
 
     # Already uploaded, contents still match, component still used.
     fpath_uploaded_correctly = self.CreateTempFile(file_name='foo1',
@@ -134,8 +140,8 @@ class TestCpFuncs(GsUtilUnitTestCase):
 
     args_uploaded_correctly = PerformParallelUploadFileToObjectArgs(
         fpath_uploaded_correctly, 0, 1, fpath_uploaded_correctly_url,
-        object_uploaded_correctly_url, '', empty_object, tracker_file,
-        tracker_file_lock, None, False)
+        object_uploaded_correctly_url, '', content_type, storage_class,
+        tracker_file, tracker_file_lock, None, False)
 
     # Not yet uploaded, but needed.
     fpath_not_uploaded = self.CreateTempFile(file_name='foo2', contents=b'2')
@@ -144,7 +150,7 @@ class TestCpFuncs(GsUtilUnitTestCase):
         '%s://%s/%s' % (self.default_provider, bucket_name, fpath_not_uploaded))
     args_not_uploaded = PerformParallelUploadFileToObjectArgs(
         fpath_not_uploaded, 0, 1, fpath_not_uploaded_url,
-        object_not_uploaded_url, '', empty_object, tracker_file,
+        object_not_uploaded_url, '', content_type, storage_class, tracker_file,
         tracker_file_lock, None, False)
 
     # Already uploaded, but contents no longer match. Even though the contents
@@ -165,15 +171,16 @@ class TestCpFuncs(GsUtilUnitTestCase):
 
     args_wrong_contents = PerformParallelUploadFileToObjectArgs(
         fpath_wrong_contents, 0, 1, fpath_wrong_contents_url,
-        object_wrong_contents_url, '', empty_object, tracker_file,
-        tracker_file_lock, None, False)
+        object_wrong_contents_url, '', content_type, storage_class,
+        tracker_file, tracker_file_lock, None, False)
 
     # Exists in tracker file, but component object no longer exists.
     fpath_remote_deleted = self.CreateTempFile(file_name='foo5', contents=b'5')
     fpath_remote_deleted_url = StorageUrlFromString(str(fpath_remote_deleted))
     args_remote_deleted = PerformParallelUploadFileToObjectArgs(
         fpath_remote_deleted, 0, 1, fpath_remote_deleted_url, '', '',
-        empty_object, tracker_file, tracker_file_lock, None, False)
+        content_type, storage_class, tracker_file, tracker_file_lock, None,
+        False)
 
     # Exists in tracker file and already uploaded, but no longer needed.
     fpath_no_longer_used = self.CreateTempFile(file_name='foo6', contents=b'6')
@@ -223,8 +230,9 @@ class TestCpFuncs(GsUtilUnitTestCase):
     bucket_name = self.MakeTempName('bucket')
     mock_api.MockCreateVersionedBucket(bucket_name)
 
-    # dst_obj_metadata used for passing content-type.
-    empty_object = apitools_messages.Object()
+    # dst_obj_metadata used for passing content-type and storage class.
+    content_type = 'ContentType'
+    storage_class = 'StorageClass'
 
     tracker_file = self.CreateTempFile(file_name='foo', contents=b'asdf')
     tracker_file_lock = parallelism_framework_util.CreateLock()
@@ -248,7 +256,8 @@ class TestCpFuncs(GsUtilUnitTestCase):
     args_uploaded_correctly = PerformParallelUploadFileToObjectArgs(
         fpath_uploaded_correctly, 0, 1, fpath_uploaded_correctly_url,
         object_uploaded_correctly_url, object_uploaded_correctly.generation,
-        empty_object, tracker_file, tracker_file_lock, None, False)
+        content_type, storage_class, tracker_file, tracker_file_lock, None,
+        False)
 
     # Duplicate object name in tracker file, but uploaded correctly.
     fpath_duplicate = fpath_uploaded_correctly
@@ -265,8 +274,8 @@ class TestCpFuncs(GsUtilUnitTestCase):
     args_duplicate = PerformParallelUploadFileToObjectArgs(
         fpath_duplicate, 0, 1, fpath_duplicate_url,
         duplicate_uploaded_correctly_url,
-        duplicate_uploaded_correctly.generation, empty_object, tracker_file,
-        tracker_file_lock, None, False)
+        duplicate_uploaded_correctly.generation, content_type, storage_class,
+        tracker_file, tracker_file_lock, None, False)
 
     # Already uploaded, but contents no longer match.
     fpath_wrong_contents = self.CreateTempFile(file_name='foo4', contents=b'4')
@@ -284,8 +293,8 @@ class TestCpFuncs(GsUtilUnitTestCase):
          object_wrong_contents.generation))
     args_wrong_contents = PerformParallelUploadFileToObjectArgs(
         fpath_wrong_contents, 0, 1, fpath_wrong_contents_url,
-        wrong_contents_url, '', empty_object, tracker_file, tracker_file_lock,
-        None, False)
+        wrong_contents_url, '', content_type, storage_class, tracker_file,
+        tracker_file_lock, None, False)
 
     dst_args = {
         fpath_uploaded_correctly: args_uploaded_correctly,
@@ -317,6 +326,92 @@ class TestCpFuncs(GsUtilUnitTestCase):
     for uri in existing_objects_to_delete:
       self.assertTrue((uri.object_name, uri.generation) in expected_to_delete)
     self.assertEqual(len(expected_to_delete), len(existing_objects_to_delete))
+
+  def testReauthChallengeIsPerformed(self):
+    mock_api = mock.Mock(spec=CloudApi)
+    destination_url = StorageUrlFromString('gs://bucket')
+
+    with SetBotoConfigForTest([
+        ('GSUtil', 'trigger_reauth_challenge_for_parallel_operations', 'True')
+    ]):
+      copy_helper.TriggerReauthForDestinationProviderIfNecessary(
+          destination_url, mock_api, worker_count=2)
+
+    mock_api.GetBucket.assert_called_once_with('bucket',
+                                               fields=['location'],
+                                               provider='gs')
+
+  def testReauthChallengeIsNotPerformedByDefault(self):
+    mock_api = mock.Mock(spec=CloudApi)
+    destination_url = StorageUrlFromString('gs://bucket')
+
+    copy_helper.TriggerReauthForDestinationProviderIfNecessary(destination_url,
+                                                               mock_api,
+                                                               worker_count=2)
+
+    mock_api.GetBucket.assert_not_called()
+
+  def testReauthChallengeNotPerformedWithFileDestination(self):
+    mock_api = mock.Mock(spec=CloudApi)
+    destination_url = StorageUrlFromString('dir/file')
+
+    with SetBotoConfigForTest([
+        ('GSUtil', 'trigger_reauth_challenge_for_parallel_operations', 'True')
+    ]):
+      copy_helper.TriggerReauthForDestinationProviderIfNecessary(
+          destination_url, mock_api, worker_count=2)
+
+    mock_api.GetBucket.assert_not_called()
+
+  def testReauthChallengeNotPerformedWhenDestinationContainsWildcard(self):
+    mock_api = mock.Mock(spec=CloudApi)
+    destination_url = StorageUrlFromString('gs://bucket*')
+
+    with SetBotoConfigForTest([
+        ('GSUtil', 'trigger_reauth_challenge_for_parallel_operations', 'True')
+    ]):
+      copy_helper.TriggerReauthForDestinationProviderIfNecessary(
+          destination_url, mock_api, worker_count=2)
+
+    mock_api.GetBucket.assert_not_called()
+
+  def testReauthChallengeNotPerformedWithSequentialExecution(self):
+    mock_api = mock.Mock(spec=CloudApi)
+    destination_url = StorageUrlFromString('gs://bucket')
+
+    with SetBotoConfigForTest([
+        ('GSUtil', 'trigger_reauth_challenge_for_parallel_operations', 'True')
+    ]):
+      copy_helper.TriggerReauthForDestinationProviderIfNecessary(
+          destination_url, mock_api, worker_count=1)
+    mock_api.GetBucket.assert_not_called()
+
+  def testReauthChallengeRaisesReauthError(self):
+    mock_api = mock.Mock(spec=CloudApi)
+    mock_api.GetBucket.side_effect = pyu2f.errors.PluginError('Reauth error')
+    destination_url = StorageUrlFromString('gs://bucket')
+
+    with SetBotoConfigForTest([
+        ('GSUtil', 'trigger_reauth_challenge_for_parallel_operations', 'True')
+    ]):
+      with self.assertRaisesRegex(pyu2f.errors.PluginError, 'Reauth error'):
+        copy_helper.TriggerReauthForDestinationProviderIfNecessary(
+            destination_url, mock_api, worker_count=2)
+
+  def testReauthChallengeSilencesOtherErrors(self):
+    mock_api = mock.Mock(spec=CloudApi)
+    mock_api.GetBucket.side_effect = Exception
+    destination_url = StorageUrlFromString('gs://bucket')
+
+    with SetBotoConfigForTest([
+        ('GSUtil', 'trigger_reauth_challenge_for_parallel_operations', 'True')
+    ]):
+      copy_helper.TriggerReauthForDestinationProviderIfNecessary(
+          destination_url, mock_api, worker_count=2)
+
+    mock_api.GetBucket.assert_called_once_with('bucket',
+                                               fields=['location'],
+                                               provider='gs')
 
   # pylint: disable=protected-access
   def testTranslateApitoolsResumableUploadException(self):
@@ -363,6 +458,18 @@ class TestCpFuncs(GsUtilUnitTestCase):
     self.assertIn('this can happen if a file changes size',
                   translated_exc.reason)
 
+  def testTranslateApitoolsResumableUploadExceptionStreamExhausted(self):
+    """Test that StreamExhausted error gets handled."""
+    gsutil_api = GcsJsonApi(GSMockBucketStorageUri,
+                            CreateOrGetGsutilLogger('copy_test'),
+                            DiscardMessagesQueue())
+    exc = apitools_exceptions.StreamExhausted('Not enough bytes')
+    translated_exc = gsutil_api._TranslateApitoolsResumableUploadException(exc)
+    self.assertTrue(isinstance(translated_exc, ResumableUploadAbortException))
+    self.assertIn(
+        'if this issue persists, try deleting the tracker files'
+        ' present under ~/.gsutil/tracker-files/', translated_exc.reason)
+
   def testSetContentTypeFromFile(self):
     """Tests that content type is correctly determined for symlinks."""
     if system_util.IS_WINDOWS:
@@ -378,12 +485,10 @@ class TestCpFuncs(GsUtilUnitTestCase):
     # Content-type of a symlink should be obtained from the link's target.
     dst_obj_metadata_mock = mock.MagicMock(contentType=None)
     src_url_stub = mock.MagicMock(object_name=temp_dir_path + os.path.sep +
-                                  link_name,
-                                  **{
-                                      'IsFileUrl.return_value': True,
-                                      'IsStream.return_value': False,
-                                      'IsFifo.return_value': False
-                                  })
+                                  link_name)
+    src_url_stub.IsFileUrl.return_value = True
+    src_url_stub.IsStream.return_value = False
+    src_url_stub.IsFifo.return_value = False
 
     # The file command should detect HTML in the real file.
     with SetBotoConfigForTest([('GSUtil', 'use_magicfile', 'True')]):
@@ -396,6 +501,19 @@ class TestCpFuncs(GsUtilUnitTestCase):
     with SetBotoConfigForTest([('GSUtil', 'use_magicfile', 'False')]):
       _SetContentTypeFromFile(src_url_stub, dst_obj_metadata_mock)
     self.assertEqual('text/plain', dst_obj_metadata_mock.contentType)
+
+  def testSetsContentTypesForCommonFileExtensionsCorrectly(self):
+    extension_rules = copy_helper.COMMON_EXTENSION_RULES.items()
+    for extension, expected_content_type in extension_rules:
+      dst_obj_metadata_mock = mock.MagicMock(contentType=None)
+      src_url_stub = mock.MagicMock(object_name='file.' + extension)
+      src_url_stub.IsFileUrl.return_value = True
+      src_url_stub.IsStream.return_value = False
+      src_url_stub.IsFifo.return_value = False
+
+      _SetContentTypeFromFile(src_url_stub, dst_obj_metadata_mock)
+
+      self.assertEqual(expected_content_type, dst_obj_metadata_mock.contentType)
 
   _PI_DAY = datetime.datetime(2016, 3, 14, 15, 9, 26)
 
@@ -437,6 +555,21 @@ class TestCpFuncs(GsUtilUnitTestCase):
             'according to the local system time.', 'coldline',
             src_url.url_string, 90)
 
+    # Recent archive objects should generate a warning.
+    for object_time_created in (self._PI_DAY, self._PI_DAY -
+                                datetime.timedelta(days=364, hours=23)):
+      recent_archive_obj = apitools_messages.Object(
+          storageClass='ARCHIVE', timeCreated=object_time_created)
+
+      with mock.patch.object(test_logger, 'warn') as mocked_warn:
+        WarnIfMvEarlyDeletionChargeApplies(src_url, recent_archive_obj,
+                                           test_logger)
+        mocked_warn.assert_called_with(
+            'Warning: moving %s object %s may incur an early deletion '
+            'charge, because the original object is less than %s days old '
+            'according to the local system time.', 'archive',
+            src_url.url_string, 365)
+
     # Sufficiently old objects should not generate a warning.
     with mock.patch.object(test_logger, 'warn') as mocked_warn:
       old_nearline_obj = apitools_messages.Object(
@@ -449,6 +582,12 @@ class TestCpFuncs(GsUtilUnitTestCase):
           storageClass='COLDLINE',
           timeCreated=self._PI_DAY - datetime.timedelta(days=90, seconds=1))
       WarnIfMvEarlyDeletionChargeApplies(src_url, old_coldline_obj, test_logger)
+      mocked_warn.assert_not_called()
+    with mock.patch.object(test_logger, 'warn') as mocked_warn:
+      old_archive_obj = apitools_messages.Object(
+          storageClass='ARCHIVE',
+          timeCreated=self._PI_DAY - datetime.timedelta(days=365, seconds=1))
+      WarnIfMvEarlyDeletionChargeApplies(src_url, old_archive_obj, test_logger)
       mocked_warn.assert_not_called()
 
     # Recent standard storage class object should not generate a warning.
@@ -562,6 +701,11 @@ class TestCpFuncs(GsUtilUnitTestCase):
     self.assertTrue(mock_stream.close.called)
     # Ensure the lock was released.
     self.assertFalse(mock_lock.__exit__.called)
+
+  def testDoesNotGetSizeSourceFieldIfFileSizeWillChange(self):
+    fields = copy_helper.GetSourceFieldsNeededForCopy(
+        True, True, False, file_size_will_change=True)
+    self.assertNotIn('size', fields)
 
 
 class TestExpandUrlToSingleBlr(GsUtilUnitTestCase):
@@ -716,3 +860,14 @@ class TestExpandUrlToSingleBlr(GsUtilUnitTestCase):
 
     self.assertTrue(have_existing_dst_container)
     self.assertEqual(exp_url, StorageUrlFromString('gs://test/folder/'))
+
+  def testCheckCloudHashesIsSkippedCorrectly(self):
+    FakeObject = collections.namedtuple('FakeObject', ['md5Hash'])
+
+    with SetBotoConfigForTest([('GSUtil', 'check_hashes', 'never')]):
+      # Should not raise a hash mismatch error:
+      _CheckCloudHashes(logger=None,
+                        src_url=None,
+                        dst_url=None,
+                        src_obj_metadata=FakeObject(md5Hash='a'),
+                        dst_obj_metadata=FakeObject(md5Hash='b'))

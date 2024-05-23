@@ -12,18 +12,18 @@ import itertools
 import re
 import logging
 
-from collections import OrderedDict
+from collections import Counter, OrderedDict
 from collections import defaultdict
 
 from typ import python_2_3_compat
 from typ.json_results import ResultType
 
 _EXPECTATION_MAP = {
-    'crash': ResultType.Crash,
-    'failure': ResultType.Failure,
-    'pass': ResultType.Pass,
-    'timeout': ResultType.Timeout,
-    'skip': ResultType.Skip
+    'Crash': ResultType.Crash,
+    'Failure': ResultType.Failure,
+    'Pass': ResultType.Pass,
+    'Timeout': ResultType.Timeout,
+    'Skip': ResultType.Skip
 }
 
 RESULT_TAGS = {
@@ -36,6 +36,10 @@ RESULT_TAGS = {
 
 _SLOW_TAG = 'Slow'
 _RETRY_ON_FAILURE_TAG = 'RetryOnFailure'
+
+VALID_RESULT_TAGS = set(
+    list(_EXPECTATION_MAP.keys()) +
+    [_SLOW_TAG, _RETRY_ON_FAILURE_TAG])
 
 
 class ConflictResolutionTypes(object):
@@ -120,8 +124,7 @@ class Expectation(object):
             pattern = self._test[:-1].replace('*', '\\*') + '*'
         else:
             pattern = self._test.replace('*', '\\*')
-        pattern = pattern.replace('%', '%25')
-        pattern = pattern.replace(' ', '%20')
+        pattern = uri_encode_spaces(pattern)
         self._string_value = ''
         if self._reason:
             self._string_value += self._reason + ' '
@@ -240,7 +243,7 @@ class TaggedTestListParser(object):
     MATCHER = re.compile(_MATCH_STRING)
 
     def __init__(self, raw_data, conflict_resolution=ConflictResolutionTypes.UNION):
-        self.tag_sets = []
+        self.tag_sets = set()
         self.conflicts_allowed = False
         self.expectations = []
         self._allowed_results = set()
@@ -249,89 +252,21 @@ class TaggedTestListParser(object):
         self._parse_raw_expectation_data(raw_data)
 
     def _parse_raw_expectation_data(self, raw_data):
-        lines = raw_data.splitlines()
+        all_lines = raw_data.splitlines()
         lineno = 1
-        num_lines = len(lines)
         tag_sets_intersection = set()
         first_tag_line = None
-        while lineno <= num_lines:
-            line = lines[lineno - 1].strip()
-            if (line.startswith(self.TAG_TOKEN) or
-                line.startswith(self.RESULT_TOKEN)):
-                if line.startswith(self.TAG_TOKEN):
-                    token = self.TAG_TOKEN
-                else:
-                    token = self.RESULT_TOKEN
-                # Handle tags.
-                if self.expectations:
-                    raise ParseError(lineno,
-                                     'Tag found after first expectation.')
+        while lineno <= len(all_lines):
+            line = all_lines[lineno - 1].strip()
+            if (line.startswith((self.TAG_TOKEN, self.RESULT_TOKEN))):
                 if not first_tag_line:
                     first_tag_line = lineno
-                right_bracket = line.find(']')
-                if right_bracket == -1:
-                    # multi-line tag set
-                    tag_set = set(
-                        [t.lower() for t in line[len(token):].split()])
-                    lineno += 1
-                    while lineno <= num_lines and right_bracket == -1:
-                        line = lines[lineno - 1].strip()
-                        if line[0] != '#':
-                            raise ParseError(
-                                lineno,
-                                'Multi-line tag set missing leading "#"')
-                        right_bracket = line.find(']')
-                        if right_bracket == -1:
-                            tag_set.update(
-                                [t.lower() for t in line[1:].split()])
-                            lineno += 1
-                        else:
-                            tag_set.update(
-                                [t.lower()
-                                 for t in line[1:right_bracket].split()])
-                            if line[right_bracket+1:]:
-                                raise ParseError(
-                                    lineno,
-                                    'Nothing is allowed after a closing tag '
-                                    'bracket')
-                else:
-                    if line[right_bracket+1:]:
-                        raise ParseError(
-                            lineno,
-                            'Nothing is allowed after a closing tag '
-                            'bracket')
-                    tag_set = set(
-                        [t.lower()
-                         for t in line[len(token):right_bracket].split()])
-                if token == self.TAG_TOKEN:
-                    tag_sets_intersection.update(
-                        (t for t in tag_set if t in self._tag_to_tag_set))
-                    self.tag_sets.append(tag_set)
-                    self._tag_to_tag_set.update(
-                        {tg: id(tag_set) for tg in tag_set})
-                else:
-                    self._allowed_results.update(tag_set)
+                tag_sets_intersection.update(
+                    self._parse_header_token_line(lineno, line, all_lines))
             elif line.startswith(self.CONFLICT_RESOLUTION):
-                value = line[len(self.CONFLICT_RESOLUTION):].lower()
-                if value not in ('union', 'override'):
-                    raise ParseError(
-                        lineno,
-                        ("Unrecognized value '%s' given for conflict_resolution"
-                         "descriptor" %
-                         value))
-                if value == 'union':
-                    self.conflict_resolution = ConflictResolutionTypes.UNION
-                else:
-                    self.conflict_resolution = ConflictResolutionTypes.OVERRIDE
+                self._parse_conflict_resolution_line(lineno, line)
             elif line.startswith(self.CONFLICTS_ALLOWED):
-                bool_value = line[len(self.CONFLICTS_ALLOWED):].lower()
-                if bool_value not in ('true', 'false'):
-                    raise ParseError(
-                        lineno,
-                        ("Unrecognized value '%s' given for conflicts_allowed "
-                         "descriptor" %
-                         bool_value))
-                self.conflicts_allowed = bool_value == 'true'
+                self._parse_conflicts_allowed_line(lineno, line)
             elif line.startswith('#') or not line:
                 # Ignore, it is just a comment or empty.
                 lineno += 1
@@ -351,7 +286,143 @@ class TaggedTestListParser(object):
                     sorted(list(tag_sets_intersection))), was_were)
             raise ParseError(first_tag_line, error_msg)
 
+    def _parse_header_token_line(self, lineno, line, all_lines):
+        """Helper function for parsing lines that start with header tokens.
+
+        Returns:
+            A set of strings containing any tag set intersections found while
+            parsing the given line.
+        """
+        if self.expectations:
+            raise ParseError(lineno,
+                             'Tag found after first expectation.')
+        if line.startswith(self.TAG_TOKEN):
+            token = self.TAG_TOKEN
+        else:
+            token = self.RESULT_TOKEN
+
+        tag_counts = self._get_tag_counts_from_header_line(
+            lineno, line, all_lines, token)
+        tag_set = set(tag_counts.keys())
+        duplicate_tags = {tag for tag, count in tag_counts.items() if count > 1}
+
+        if duplicate_tags:
+            message = 'duplicate tag(s): {}'.format(
+                ', '.join(sorted(duplicate_tags)))
+            raise ParseError(lineno, message)
+
+        tag_sets_intersection = set()
+        if token == self.TAG_TOKEN:
+            tag_set = frozenset([t.lower() for t in tag_set])
+            tag_sets_intersection.update(
+                (t for t in tag_set if t in self._tag_to_tag_set))
+            self.tag_sets.add(tag_set)
+            self._tag_to_tag_set.update(
+                {tg: id(tag_set) for tg in tag_set})
+        else:
+            for t in tag_set:
+                if t not in VALID_RESULT_TAGS:
+                    raise ParseError(
+                        lineno,
+                        'Result tag set [%s] contains values not in '
+                        'the list of known values [%s]' %
+                        (', '.join(tag_set),
+                         ', '.join(VALID_RESULT_TAGS)))
+            self._allowed_results.update(tag_set)
+        return tag_sets_intersection
+
+    def _get_tag_counts_from_header_line(self, lineno, line, all_lines, token):
+        """Helper function for parsing tags from a header line.
+
+        Returns:
+            A Counter object containing counts for each found tag.
+        """
+        right_bracket = line.find(']')
+        prefix_size = len(token)
+        tag_counts = Counter()
+        # Loop through every line until we find the closing ], adding any tags
+        # we fine. The line with the closing ] is handled after the loop.
+        while lineno <= len(all_lines) and right_bracket == -1:
+            tag_counts.update(line[prefix_size:].split())
+            lineno += 1
+            line = all_lines[lineno - 1].strip()
+            prefix_size = 1
+            if line[0] != '#':
+                raise ParseError(
+                    lineno,
+                    'Multi-line tag set missing leading "#"')
+            right_bracket = line.find(']')
+
+        if line[right_bracket+1:]:
+            raise ParseError(
+                lineno,
+                'Nothing is allowed after a closing tag '
+                'bracket')
+
+        tag_counts.update(line[prefix_size:right_bracket].split())
+        return tag_counts
+
+    def _parse_conflict_resolution_line(self, lineno, line):
+        """Helper function for parsing conflict resolution annotations."""
+        value = line[len(self.CONFLICT_RESOLUTION):].lower()
+        if value not in ('union', 'override'):
+            raise ParseError(
+                lineno,
+                ("Unrecognized value '%s' given for conflict_resolution"
+                 "descriptor" %
+                 value))
+        if value == 'union':
+            self.conflict_resolution = ConflictResolutionTypes.UNION
+        else:
+            self.conflict_resolution = ConflictResolutionTypes.OVERRIDE
+
+    def _parse_conflicts_allowed_line(self, lineno, line):
+        """Helper function for parsing conflicts allowed annotations."""
+        bool_value = line[len(self.CONFLICTS_ALLOWED):].lower()
+        if bool_value not in ('true', 'false'):
+            raise ParseError(
+                lineno,
+                ("Unrecognized value '%s' given for conflicts_allowed "
+                 "descriptor" %
+                 bool_value))
+        self.conflicts_allowed = bool_value == 'true'
+
     def _parse_expectation_line(self, lineno, line):
+        reason, raw_tags, test, raw_results, trailing_comments =\
+            self._parse_expectation_line_into_components(lineno, line)
+        tags = [raw_tag.lower()
+                for raw_tag in raw_tags.split()] if raw_tags else []
+        self._validate_expectation_structure(lineno, test, tags)
+        results, retry_on_failure, is_slow_test =\
+            self._parse_and_validate_raw_results(lineno, raw_results)
+
+        # replace %20 in test path to ' '
+        test = uri_decode_spaces(test)
+
+        # remove escapes for asterisks
+        is_glob = not test.endswith('\\*') and test.endswith('*')
+        test = test.replace('\\*', '*')
+        if raw_tags:
+            raw_tags = raw_tags.split()
+        if raw_results:
+            raw_results = raw_results.split()
+        # Tags from tag groups will be stored in lower case in the Expectation
+        # instance. These tags will be compared to the tags passed in to
+        # the Runner instance which are also stored in lower case.
+        return Expectation(
+            reason, test, tags, results, lineno, retry_on_failure, is_slow_test,
+            self.conflict_resolution, raw_tags=raw_tags, raw_results=raw_results,
+            is_glob=is_glob, trailing_comments=trailing_comments)
+
+    def _parse_expectation_line_into_components(self, lineno, line):
+        """Helper function to break a single expectation line into components.
+
+        Returns:
+            A tuple of strings (reason, raw_tags, test, raw_results, trailing
+            comments) which correspond to the components that make up an
+            expectation line in an expectation file. Values may be empty strings
+            if that particular component was not present.
+        """
         match = self.MATCHER.match(line)
         if not match:
             raise ParseError(lineno, 'Syntax error: %s' % line)
@@ -365,10 +436,17 @@ class TaggedTestListParser(object):
             reason = reason.strip()
             index = line.find(reason)
             reason = line[:index] + reason
+        return reason, raw_tags, test, raw_results, trailing_comments
 
-        tags = [raw_tag.lower() for raw_tag in raw_tags.split()] if raw_tags else []
+    def _validate_expectation_structure(self, lineno, test, tags):
+        """Helper function to validate aspects of an expectation being parsed.
+
+        Specifically, checks for:
+            * Correct use of wildcard characters
+            * All tags used are known
+            * Only one tag from each tag set is used
+        """
         tag_set_ids = set()
-
         for i in range(len(test)-1):
             if test[i] == '*' and ((i > 0 and test[i-1] != '\\') or i == 0):
                 raise ParseError(lineno,
@@ -391,11 +469,20 @@ class TaggedTestListParser(object):
                               _group_to_string(sorted(tag_intersection)))
             raise ParseError(lineno, error_msg)
 
+    def _parse_and_validate_raw_results(self, lineno, raw_results):
+        """Helper function to validate and parse raw results into known values.
+
+        Returns:
+            A tuple (results, retry_on_failure, is_slow_test). |results| is a
+            list of parsed results. |retry_on_failure| is a boolean denoting
+            whether the test should be retried on failure or not. |is_slow_test|
+            is a boolean denoting whether the test should be considered slow or
+            not.
+        """
         results = []
         retry_on_failure = False
         is_slow_test = False
         for r in raw_results.split():
-            r = r.lower()
             if r not in self._allowed_results:
                 raise ParseError(lineno, 'Unknown result type "%s"' % r)
             try:
@@ -403,39 +490,20 @@ class TaggedTestListParser(object):
                 # the RetryOnFailure tag
                 if r in  _EXPECTATION_MAP:
                     results.append(_EXPECTATION_MAP[r])
-                elif r == 'retryonfailure':
+                elif r == _RETRY_ON_FAILURE_TAG:
                     retry_on_failure = True
-                elif r == 'slow':
+                elif r == _SLOW_TAG:
                     is_slow_test = True
                 else:
                     raise KeyError
             except KeyError:
                 raise ParseError(lineno, 'Unknown result type "%s"' % r)
-
-        # replace %20 in test path to ' '
-        test = test.replace('%20', ' ')
-        test = test.replace('%25', '%')
-
-        # remove escapes for asterisks
-        is_glob = not test.endswith('\\*') and test.endswith('*')
-        test = test.replace('\\*', '*')
-        if raw_tags:
-            raw_tags = raw_tags.split()
-        if raw_results:
-            raw_results = raw_results.split()
-        # Tags from tag groups will be stored in lower case in the Expectation
-        # instance. These tags will be compared to the tags passed in to
-        # the Runner instance which are also stored in lower case.
-        return Expectation(
-            reason, test, tags, results, lineno, retry_on_failure, is_slow_test,
-            self.conflict_resolution, raw_tags=raw_tags, raw_results=raw_results,
-            is_glob=is_glob, trailing_comments=trailing_comments)
-
+        return results, retry_on_failure, is_slow_test
 
 class TestExpectations(object):
 
     def __init__(self, tags=None, ignored_tags=None):
-        self.tag_sets = []
+        self.tag_sets = set()
         self.ignored_tags = set(ignored_tags or [])
         self.set_tags(tags or [])
         # Expectations may either refer to individual tests, or globs of
@@ -445,7 +513,6 @@ class TestExpectations(object):
         # a regular dict for reasons given below.
         self.individual_exps = OrderedDict()
         self.glob_exps = OrderedDict()
-        self._tags_conflict = _default_tags_conflict
         self._conflict_resolution = ConflictResolutionTypes.UNION
 
     def set_tags(self, tags, raise_ex_for_bad_tags=False):
@@ -468,42 +535,50 @@ class TestExpectations(object):
         # that are generated by the test runner.
         def _pluralize_unknown(missing):
             if len(missing) > 1:
-                return ('s %s ' % ', '.join(missing[:-1]) + 'and %s ' % missing[-1] + 'are',
+                return ('s %s and %s are' % (', '.join(missing[:-1]),
+                                             missing[-1]),
                         'have', 's are')
             else:
-                return (' %s ' % missing[0] + 'is', 'has', ' is')
-        tags = [t.lower() for t in tags]
-        unknown_tags = sorted([
-            t for t in tags
-            if self.tag_sets and all(
-                    t not in tag_set and t not in self.ignored_tags
-                    for tag_set in self.tag_sets)])
+                return (' %s is' % missing[0], 'has', ' is')
+        tags = set(t.lower() for t in tags)
+        unknown_tags = set()
+        if self.tag_sets:
+            known_and_ignored_tags = set().union(
+                *self.tag_sets).union(self.ignored_tags)
+            unknown_tags = tags - known_and_ignored_tags
         if unknown_tags:
             msg = (
                 'Tag%s not declared in the expectations file and %s not been '
                 'explicitly ignored by the test. There may have been a typo in '
                 'the expectations file. Please make sure the aforementioned '
                 'tag%s declared at the top of the expectations file.' %
-                _pluralize_unknown(unknown_tags))
+                _pluralize_unknown(sorted(unknown_tags)))
             if raise_ex_for_bad_tags:
                 raise ValueError(msg)
             else:
                 logging.warning(msg)
 
     def parse_tagged_list(self, raw_data, file_name='',
-                          tags_conflict=_default_tags_conflict,
+                          tags_conflict=None,
                           conflict_resolution=ConflictResolutionTypes.UNION):
         ret = 0
         self.file_name = file_name
         self._conflict_resolution = conflict_resolution
+        tags_conflict = tags_conflict or _default_tags_conflict
         try:
             parser = TaggedTestListParser(raw_data, conflict_resolution)
         except ParseError as e:
             return 1, str(e)
-        # TODO(crbug.com/1148060): Properly update self._tags as well using
-        # self.set_tags().
-        self.tag_sets = parser.tag_sets
-        self._tags_conflict = tags_conflict
+        # If we have parsed another tagged list before, ensure that the tag sets
+        # are the same in order to prevent any ambiguity about which set a tag
+        # belongs to.
+        if self.tag_sets:
+            if not self.tag_sets == parser.tag_sets:
+                raise RuntimeError(
+                    'Existing tag sets %s do not match incoming sets %s' % (
+                        sorted(self.tag_sets), sorted(parser.tag_sets)))
+        else:
+            self.tag_sets = parser.tag_sets
         # Conflict resolution tag in raw data will take precedence
         self._conflict_resolution = parser.conflict_resolution
         # TODO(crbug.com/83560) - Add support for multiple policies
@@ -525,7 +600,8 @@ class TestExpectations(object):
 
         errors = ''
         if not parser.conflicts_allowed:
-            errors = self.check_test_expectations_patterns_for_conflicts()
+            errors = self.check_test_expectations_patterns_for_conflicts(
+                tags_conflict)
             ret = 1 if errors else 0
         return ret, errors
 
@@ -565,6 +641,10 @@ class TestExpectations(object):
         # should_retry_on_failure flag set to true
         #
         # The longest matching test string (name or glob) has priority.
+
+        # Ensure that the given test name is in the same decoded format that
+        # is used internally so that %20 is handled properly.
+        test = uri_decode_spaces(test)
         self._results = set()
         self._reasons = set()
         self._exp_tags = set()
@@ -627,18 +707,18 @@ class TestExpectations(object):
         # Nothing matched, so by default, the test is expected to pass.
         return Expectation(test=test)
 
-    def tag_sets_conflict(self, s1, s2):
+    def tag_sets_conflict(self, s1, s2, tags_conflict_fn):
         # Tag sets s1 and s2 have no conflict when there exists a tag in s1
         # and tag in s2 that are from the same tag declaration set and do not
         # conflict with each other.
         for tag_set in self.tag_sets:
             for t1, t2 in itertools.product(s1, s2):
                 if (t1 in tag_set and t2 in tag_set and
-                    self._tags_conflict(t1, t2)):
+                    tags_conflict_fn(t1, t2)):
                     return False
         return True
 
-    def check_test_expectations_patterns_for_conflicts(self):
+    def check_test_expectations_patterns_for_conflicts(self, tags_conflict_fn):
         # This function makes sure that any test expectations that have the same
         # pattern do not conflict with each other. Test expectations conflict
         # if their tag sets do not have conflicting tags. Tags conflict when
@@ -652,7 +732,7 @@ class TestExpectations(object):
         for pattern, exps in patterns_to_exps.items():
             conflicts_exist = False
             for e1, e2 in itertools.combinations(exps, 2):
-                if self.tag_sets_conflict(e1.tags, e2.tags):
+                if self.tag_sets_conflict(e1.tags, e2.tags, tags_conflict_fn):
                     if not conflicts_exist:
                         error_msg += (
                             '\nFound conflicts for pattern %s%s:\n' %
@@ -672,6 +752,9 @@ class TestExpectations(object):
         # test_names: list of test names that are used to find test expectations
         # that do not apply to any of test names in the list.
         broken_exps = []
+        # Apply the same temporary encoding we do when ingesting/comparing
+        # expectations.
+        test_names = [uri_decode_spaces(tn) for tn in test_names]
         test_names = set(test_names)
         for pattern, exps in self.individual_exps.items():
             if pattern not in test_names:
@@ -699,3 +782,14 @@ class TestExpectations(object):
                     break
                 _trie = _trie[l]
         return broken_exps + broken_glob_exps
+
+def uri_encode_spaces(s):
+  s = s.replace('%', '%25')
+  s = s.replace(' ', '%20')
+  return s
+
+
+def uri_decode_spaces(s):
+  s = s.replace('%20', ' ')
+  s = s.replace('%25', '%')
+  return s

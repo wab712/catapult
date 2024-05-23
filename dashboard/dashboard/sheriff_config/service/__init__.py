@@ -7,21 +7,22 @@ from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
+import base64
+import logging
+import time
+import os
+
 from flask import Flask, request, jsonify
 from flask_talisman import Talisman
 from google.cloud import datastore
 from google.protobuf import json_format
-import base64
 import google.auth
-import logging
+
+from dashboard.protobuf import sheriff_config_pb2
 import luci_config
 import match_policy
-import os
 import service_client
-import sheriff_config_pb2
-import sheriff_pb2
 import validator
-import time
 
 
 class Error(Exception):
@@ -32,7 +33,7 @@ class MissingEnvironmentVars(Error):
 
   def __init__(self, env_vars):
     self.env_vars = env_vars
-    super(MissingEnvironmentVars, self).__init__()
+    super().__init__()
 
   def __str__(self):
     return 'Missing environment variables: %r' % (self.env_vars)

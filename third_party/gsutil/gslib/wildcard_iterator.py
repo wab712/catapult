@@ -24,7 +24,6 @@ import glob
 import logging
 import os
 import re
-import sys
 import textwrap
 
 import six
@@ -110,7 +109,8 @@ class CloudWildcardIterator(WildcardIterator):
     self.project_id = project_id
     self.logger = logger or logging.getLogger()
 
-  def __iter__(self, bucket_listing_fields=None,
+  def __iter__(self,
+               bucket_listing_fields=None,
                expand_top_level_buckets=False):
     """Iterator that gets called when iterating over the cloud wildcard.
 
@@ -220,7 +220,7 @@ class CloudWildcardIterator(WildcardIterator):
           url = StorageUrlFromString(urls_needing_expansion.pop(0))
           (prefix, delimiter, prefix_wildcard,
            suffix_wildcard) = (self._BuildBucketFilterStrings(url.object_name))
-          prog = re.compile(fnmatch.translate(prefix_wildcard))
+          regex_patterns = self._GetRegexPatterns(prefix_wildcard)
 
           # If we have a suffix wildcard, we only care about listing prefixes.
           listing_fields = (set(['prefixes'])
@@ -234,44 +234,81 @@ class CloudWildcardIterator(WildcardIterator):
               all_versions=self.all_versions or single_version_request,
               provider=self.wildcard_url.scheme,
               fields=listing_fields):
-            if obj_or_prefix.datatype == CloudApi.CsObjectOrPrefixType.OBJECT:
-              gcs_object = obj_or_prefix.data
-              if prog.match(gcs_object.name):
-                if not suffix_wildcard or (StripOneSlash(
-                    gcs_object.name) == suffix_wildcard):
-                  if not single_version_request or (self._SingleVersionMatches(
-                      gcs_object.generation)):
-                    yield self._GetObjectRef(
-                        bucket_url_string,
-                        gcs_object,
-                        with_version=(self.all_versions or
-                                      single_version_request))
-            else:  # CloudApi.CsObjectOrPrefixType.PREFIX
-              prefix = obj_or_prefix.data
+            for pattern in regex_patterns:
+              if obj_or_prefix.datatype == CloudApi.CsObjectOrPrefixType.OBJECT:
+                gcs_object = obj_or_prefix.data
+                if pattern.match(gcs_object.name):
+                  if not suffix_wildcard or (StripOneSlash(gcs_object.name)
+                                             == suffix_wildcard):
+                    if not single_version_request or (
+                        self._SingleVersionMatches(gcs_object.generation)):
+                      yield self._GetObjectRef(
+                          bucket_url_string,
+                          gcs_object,
+                          with_version=(self.all_versions or
+                                        single_version_request))
+                  break
+              else:  # CloudApi.CsObjectOrPrefixType.PREFIX
+                prefix = obj_or_prefix.data
 
-              if ContainsWildcard(prefix):
-                # TODO: Disambiguate user-supplied strings from iterated
-                # prefix and object names so that we can better reason
-                # about wildcards and handle this case without raising an error.
-                raise CommandException(
-                    'Cloud folder %s%s contains a wildcard; gsutil does '
-                    'not currently support objects with wildcards in their '
-                    'name.' % (bucket_url_string, prefix))
+                if ContainsWildcard(prefix):
+                  # TODO: Disambiguate user-supplied strings from iterated
+                  # prefix and object names so that we can better reason
+                  # about wildcards and handle this case without raising
+                  # an error.
+                  raise CommandException(
+                      'Cloud folder %s%s contains a wildcard; gsutil does '
+                      'not currently support objects with wildcards in their '
+                      'name.' % (bucket_url_string, prefix))
 
-              # If the prefix ends with a slash, remove it.  Note that we only
-              # remove one slash so that we can successfully enumerate dirs
-              # containing multiple slashes.
-              rstripped_prefix = StripOneSlash(prefix)
-              if prog.match(rstripped_prefix):
-                if suffix_wildcard and rstripped_prefix != suffix_wildcard:
-                  # There's more wildcard left to expand.
-                  url_append_string = '%s%s' % (bucket_url_string,
-                                                rstripped_prefix + '/' +
-                                                suffix_wildcard)
-                  urls_needing_expansion.append(url_append_string)
-                else:
-                  # No wildcard to expand, just yield the prefix
-                  yield self._GetPrefixRef(bucket_url_string, prefix)
+                # If the prefix ends with a slash, remove it.  Note that we only
+                # remove one slash so that we can successfully enumerate dirs
+                # containing multiple slashes.
+                rstripped_prefix = StripOneSlash(prefix)
+                if pattern.match(rstripped_prefix):
+                  if suffix_wildcard and rstripped_prefix != suffix_wildcard:
+                    # There's more wildcard left to expand.
+                    url_append_string = '%s%s' % (bucket_url_string,
+                                                  rstripped_prefix + '/' +
+                                                  suffix_wildcard)
+                    urls_needing_expansion.append(url_append_string)
+                  else:
+                    # No wildcard to expand, just yield the prefix.
+                    yield self._GetPrefixRef(bucket_url_string, prefix)
+                  break
+
+  def _GetRegexPatterns(self, wildcard_pattern):
+    """Returns list of regex patterns derived from the wildcard patterns.
+
+    Args:
+      wildcard_pattern (str): A wilcard_pattern to filter the resources.
+
+    Returns:
+      List of compiled regex patterns.
+
+    This translates the wildcard_pattern and also creates some additional
+    patterns so that we can treat ** in a/b/c/**/d.txt as zero or more folders.
+    This means, a/b/c/d.txt will also be returned along with a/b/c/e/f/d.txt.
+    """
+    # Case 1: The original pattern should always be present.
+    wildcard_patterns = [wildcard_pattern]
+    if '/**/' in wildcard_pattern:
+      # Case 2: Will fetch object gs://bucket/dir1/a.txt if pattern is
+      # gs://bucket/dir1/**/a.txt
+      updated_pattern = wildcard_pattern.replace('/**/', '/')
+      wildcard_patterns.append(updated_pattern)
+    else:
+      updated_pattern = wildcard_pattern
+
+    for pattern in (wildcard_pattern, updated_pattern):
+      if pattern.startswith('**/'):
+        # Case 3 (using wildcard_pattern): Will fetch object gs://bucket/a.txt
+        # if pattern is gs://bucket/**/a.txt. Note that '/**/' will match
+        # '/a.txt' not 'a.txt'.
+        # Case 4:(using updated_pattern) Will fetch gs://bucket/dir1/dir2/a.txt
+        # if the pattern is gs://bucket/**/dir1/**/a.txt
+        wildcard_patterns.append(pattern[3:])
+    return [re.compile(fnmatch.translate(p)) for p in wildcard_patterns]
 
   def _BuildBucketFilterStrings(self, wildcard):
     """Builds strings needed for querying a bucket and filtering results.
@@ -326,9 +363,14 @@ class CloudWildcardIterator(WildcardIterator):
       end = wildcard_part.find('/')
       if end != -1:
         wildcard_part = wildcard_part[:end + 1]
-      # Remove trailing '/' so we will match gs://bucket/abc* as well as
-      # gs://bucket/abc*/ with the same wildcard regex.
-      prefix_wildcard = StripOneSlash((prefix or '') + wildcard_part)
+
+      prefix_wildcard = (prefix or '') + wildcard_part
+      if not prefix_wildcard.endswith('**/'):
+        # Remove trailing '/' so we will match gs://bucket/abc* as well as
+        # gs://bucket/abc*/ with the same wildcard regex. Don't do this for
+        # double wildcards because those won't pass a delimiter to the API.
+        prefix_wildcard = StripOneSlash(prefix_wildcard)
+
       suffix_wildcard = wildcard[match.end():]
       end = suffix_wildcard.find('/')
       if end == -1:
@@ -540,16 +582,24 @@ class FileWildcardIterator(WildcardIterator):
   files in any subdirectory named 'abc').
   """
 
-  def __init__(self, wildcard_url, ignore_symlinks=False, logger=None):
+  def __init__(self,
+               wildcard_url,
+               exclude_tuple=None,
+               ignore_symlinks=False,
+               logger=None):
     """Instantiates an iterator over BucketListingRefs matching wildcard URL.
 
     Args:
       wildcard_url: FileUrl that contains the wildcard to iterate.
+      exclude_tuple: (base_url, exclude_pattern), where base_url is
+                     top-level URL to list; exclude_pattern is a regex
+                     of paths to ignore during iteration.
       ignore_symlinks: If True, ignore symlinks during iteration.
       logger: logging.Logger used for outputting debug messages during
               iteration. If None, the root logger will be used.
     """
     self.wildcard_url = wildcard_url
+    self.exclude_tuple = exclude_tuple
     self.ignore_symlinks = ignore_symlinks
     self.logger = logger or logging.getLogger()
 
@@ -643,15 +693,26 @@ class FileWildcardIterator(WildcardIterator):
     # originated on Windows) os.walk() will not attempt to decode and then die
     # with a "codec can't decode byte" error, and instead we can catch the error
     # at yield time and print a more informative error message.
-    for dirpath, dirnames, filenames in os.walk(directory.encode(UTF8)):
-      dirpath = dirpath.decode(UTF8)
-      dirnames = [dn.decode(UTF8) for dn in dirnames]
-      filenames = [fn.decode(UTF8) for fn in filenames]
-      if self.logger:
-        for dirname in dirnames:
-          full_dir_path = os.path.join(dirpath, dirname)
-          if os.path.islink(full_dir_path):
-            self.logger.info('Skipping symlink directory "%s"', full_dir_path)
+    for dirpath, dirnames, filenames in os.walk(six.ensure_text(directory),
+                                                topdown=True):
+      filtered_dirnames = []
+
+      for dirname in dirnames:
+        full_dir_path = os.path.join(dirpath, dirname)
+        # Removes directories in place to prevent them and their children from
+        # being iterated. See https://docs.python.org/3/library/os.html#os.walk
+        if not self._ExcludeDir(full_dir_path):
+          filtered_dirnames.append(dirname)
+        else:
+          # If a symlink is excluded above we don't want to print 2 messages.
+          continue
+        # This only prints a log message as os.walk() will not, by default,
+        # walk down into symbolic links that resolve to directories.
+        if self.logger and os.path.islink(full_dir_path):
+          self.logger.info('Skipping symlink directory "%s"', full_dir_path)
+
+      dirnames[:] = filtered_dirnames
+
       for f in fnmatch.filter(filenames, wildcard):
         try:
           yield os.path.join(dirpath, FixWindowsEncodingIfNeeded(f))
@@ -685,6 +746,29 @@ class FileWildcardIterator(WildcardIterator):
           raise CommandException('\n'.join(
               textwrap.wrap(_UNICODE_EXCEPTION_TEXT %
                             repr(os.path.join(dirpath, f)))))
+
+  def _ExcludeDir(self, dir):
+    """Check a directory to see if it should be excluded from os.walk.
+
+    Args:
+      dir: String representing the directory to check.
+
+    Returns:
+      True if the directory should be excluded.
+    """
+    if self.exclude_tuple is None:
+      return False
+    (base_url, exclude_dirs, exclude_pattern) = self.exclude_tuple
+    if not exclude_dirs:
+      return False
+    str_to_check = StorageUrlFromString(
+        dir).url_string[len(base_url.url_string):]
+    if str_to_check.startswith(self.wildcard_url.delim):
+      str_to_check = str_to_check[1:]
+    if exclude_pattern.match(str_to_check):
+      if self.logger:
+        self.logger.info('Skipping excluded directory %s...', dir)
+      return True
 
   # pylint: disable=unused-argument
   def IterObjects(self, bucket_listing_fields=None):
@@ -754,6 +838,7 @@ def CreateWildcardIterator(url_str,
                            gsutil_api,
                            all_versions=False,
                            project_id=None,
+                           exclude_tuple=None,
                            ignore_symlinks=False,
                            logger=None):
   """Instantiate a WildcardIterator for the given URL string.
@@ -766,6 +851,9 @@ def CreateWildcardIterator(url_str,
                   matching the wildcard.  If false, yields just the live
                   object version.
     project_id: Project id to use for bucket listings.
+    exclude_tuple: (base_url, exclude_pattern), where base_url is
+                   top-level URL to list; exclude_pattern is a regex
+                   of paths to ignore during iteration.
     ignore_symlinks: For FileUrls, ignore symlinks during iteration if true.
     logger: logging.Logger used for outputting debug messages during iteration.
             If None, the root logger will be used.
@@ -778,6 +866,7 @@ def CreateWildcardIterator(url_str,
   logger = logger or logging.getLogger()
   if url.IsFileUrl():
     return FileWildcardIterator(url,
+                                exclude_tuple=exclude_tuple,
                                 ignore_symlinks=ignore_symlinks,
                                 logger=logger)
   else:  # Cloud URL

@@ -3,7 +3,12 @@
 # found in the LICENSE file.
 
 from __future__ import absolute_import
-import collections
+try:
+  # Since python 3
+  import collections.abc as collections_abc
+except ImportError:
+  # Won't work after python 3.8
+  import collections as collections_abc
 from telemetry.core import exceptions
 
 
@@ -11,7 +16,7 @@ def DebuggerUrlToId(debugger_url):
   return debugger_url.split('/')[-1]
 
 
-class InspectorBackendList(collections.Sequence):
+class InspectorBackendList(collections_abc.Sequence):
   """A dynamic sequence of active InspectorBackends."""
 
   def __init__(self, browser_backend):
@@ -49,7 +54,7 @@ class InspectorBackendList(collections.Sequence):
     The wrapper API is the public interface for InspectorBackend. It
     may expose whatever methods are desired on top of that backend.
     """
-    raise NotImplementedError
+    raise NotImplementedError()
 
   # TODO(crbug.com/398467): Remove this method and turn inspector_backend_list
   # API to dictionary-like API.
@@ -121,4 +126,3 @@ class InspectorBackendList(collections.Sequence):
     This can be overwritten by sub-classes to add more debugging information to
     errors.
     """
-    pass

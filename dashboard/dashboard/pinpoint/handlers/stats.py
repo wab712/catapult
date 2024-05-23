@@ -9,21 +9,20 @@ from __future__ import absolute_import
 import datetime
 import json
 
-import webapp2
+from flask import make_response
 
+from dashboard.common import cloud_metric
 from dashboard.pinpoint.models import job
 
 _MAX_JOBS_TO_FETCH = 10000
 
 # TODO: Generalize the Jobs handler to allow the user to choose what fields to
-# include and how many Jobs to fertch.
+# include and how many Jobs to fetch.
 
 
-class Stats(webapp2.RequestHandler):
-  """Shows an overview of recent anomalies for perf sheriffing."""
-
-  def get(self):
-    self.response.out.write(json.dumps(_GetJobs()))
+@cloud_metric.APIMetric("pinpoint", "/api/stats")
+def StatsHandler():
+  return make_response(json.dumps(_GetJobs()))
 
 
 def _GetJobs():

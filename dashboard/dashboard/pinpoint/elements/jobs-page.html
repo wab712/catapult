@@ -28,8 +28,8 @@ found in the LICENSE file.
       }
 
       .pagination {
-        position: absolute;
-        right: 100px;
+        position: relative;
+        right: 80px;
       }
 
       .pagination a {
@@ -38,6 +38,7 @@ found in the LICENSE file.
         padding: 8px 16px;
         text-decoration: none;
         transition: background-color .3s;
+        border: 1px solid #ddd;
       }
 
       .pagination a.active {
@@ -45,13 +46,23 @@ found in the LICENSE file.
         color: white;
       }
 
-      .pagination a:hover:not(.active) {background-color: #ddd;}
+      .pagination a:hover:not(.active) {
+        background-color: #ddd;
+        cursor: pointer;
+      }
+
+      .jobs-display {
+        cursor: pointer;
+      }
     </style>
 
     <app-route route="{{route}}" pattern="/:sortBy:sortDescending" query-params="{{queryParams}}"></app-route>
 
     <h1>
-      Jobs
+      [[jobTitle(user, user_view)]]
+      <span hidden$=[[!user]]>
+        (<a class="jobs-display" on-click="toggleJobsView">[[toggleJobsLink(user_view)]]</a>)
+      </span>
       <span id="job-count" class="badge">
         [[jobCount(jobs)]]
       </span>
@@ -59,22 +70,26 @@ found in the LICENSE file.
     </h1>
     <loading-wrapper
       auto
-      params="{{params}}"
+      params="[[computeParams(prev_cursor, next_cursor, user, user_view)]]"
       url="/api/jobs"
-      headers="[[authHeaders]]"
       response="{{jobs}}">
+      <div class="pagination">
+        <a hidden$=[[!jobs.next]] on-click="nextPage">Next &gt;</a>
+        <a hidden$=[[!jobs.prev]] on-click="prevPage">&lt; Prev</a>
+      </div>
       <jobs-table id="jobs-table"
           jobs="[[jobs.jobs]]"
           sort-by="[[queryParams.sortBy]]"
           sort-descending="[[queryParams.sortDescending]]"
-          auth-headers="[[authHeaders]]">
+          user="[[user]]"
+          client="{{client}}">
       </jobs-table>
       <div class="pagination">
-        <a hidden$=[[!jobs.next]] on-click="nextPage">Next</span>
-        <a hidden$=[[!jobs.prev]] on-click="prevPage">Prev</span>
+        <a hidden$=[[!jobs.next]] on-click="nextPage">Next &gt;</a>
+        <a hidden$=[[!jobs.prev]] on-click="prevPage">&lt; Prev</a>
       </div>
     </loading-wrapper>
-    <new-job-fab auth-headers="[[authHeaders]]"></new-job-fab>
+    <new-job-fab hidden$=[[!user]] user="[[user]]" client="{{client}}"></new-job-fab>
   </template>
 
   <script>
@@ -94,9 +109,30 @@ found in the LICENSE file.
           value: '',
           notify: true
         },
-        params: {
-          computed: 'computeParams(prev_cursor, next_cursor)'
+        user_view: {
+          value: true,
+          notify: true
         },
+        user: {
+          type: String,
+          notify: true,
+          readonly: true,
+          observer: 'userChanged'
+        },
+      },
+
+      userChanged() {
+        this.set('prev_cursor', '');
+        this.set('next_cursor', '');
+        this.set('user_view', true);
+      },
+
+      jobTitle(user, user_view) {
+        if (user && user_view) {
+          return 'Jobs - ' + user;
+        } else {
+          return 'Jobs - All';
+        }
       },
 
       jobCount(jobs) {
@@ -116,8 +152,31 @@ found in the LICENSE file.
         this.set('next_cursor', this.jobs.next_cursor);
       },
 
-      computeParams(prev_cursor, next_cursor) {
-        return {prev_cursor: prev_cursor, next_cursor: next_cursor};
+      toggleJobsView(event) {
+        this.set('prev_cursor', '');
+        this.set('next_cursor', '');
+        this.set('user_view', !this.user_view);
+      },
+
+      toggleJobsLink(user_view) {
+        if (user_view) {
+          return 'List All';
+        } else {
+          return 'List Own';
+        }
+      },
+
+      computeParams(prev_cursor, next_cursor, user, user_view) {
+        let filter = '';
+        if (user && user_view) {
+          filter = 'user=' + user;
+        }
+        let params = {
+            prev_cursor: prev_cursor,
+            next_cursor: next_cursor,
+            filter: filter
+        };
+        return params;
       },
 
       selected() {

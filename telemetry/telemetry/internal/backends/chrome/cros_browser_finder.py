@@ -4,6 +4,7 @@
 """Finds CrOS browsers that can be started and controlled by telemetry."""
 
 from __future__ import absolute_import
+import json
 import logging
 import os
 import platform
@@ -11,6 +12,7 @@ import posixpath
 import random
 
 from telemetry.core import cros_interface
+from telemetry.core import linux_based_interface
 from telemetry.core import platform as platform_module
 from telemetry.internal.backends.chrome import chrome_startup_args
 from telemetry.internal.backends.chrome import cros_browser_backend
@@ -34,7 +36,7 @@ class PossibleCrOSBrowser(possible_browser.PossibleBrowser):
   # anything in this file, so we can quote it here instead of everywhere it's
   # used.
   _CROS_MINIDUMP_DIR = cmd_helper.SingleQuote(
-      cros_interface.CrOSInterface.CROS_MINIDUMP_DIR)
+      cros_interface.CrOSInterface.MINIDUMP_DIR)
 
   _DEFAULT_CHROME_ENV = [
       'CHROME_HEADLESS=1',
@@ -42,7 +44,7 @@ class PossibleCrOSBrowser(possible_browser.PossibleBrowser):
   ]
 
   def __init__(self, browser_type, finder_options, cros_platform, is_guest):
-    super(PossibleCrOSBrowser, self).__init__(
+    super().__init__(
         browser_type,
         'lacros' if browser_type == 'lacros-chrome' else 'cros', True)
     assert browser_type in FindAllBrowserTypes(), (
@@ -83,7 +85,7 @@ class PossibleCrOSBrowser(possible_browser.PossibleBrowser):
     return [self.profile_directory, self.browser_directory]
 
   def SetUpEnvironment(self, browser_options):
-    super(PossibleCrOSBrowser, self).SetUpEnvironment(browser_options)
+    super().SetUpEnvironment(browser_options)
 
     # Copy extensions to temp directories on the device.
     # Note that we also perform this copy locally to ensure that
@@ -105,10 +107,34 @@ class PossibleCrOSBrowser(possible_browser.PossibleBrowser):
     cri.RunCmdOnDevice(
         ['mv', self._CROS_MINIDUMP_DIR, self._existing_minidump_dir])
 
+    if self._browser_options.clear_enterprise_policy:
+      cri.StopUI()
+      cri.RmRF('/var/lib/devicesettings/*')
+
+      local_state_path = '/home/chronos/Local State'
+      if self._browser_options.dont_override_profile:
+        # Ash keeps track of Lacros profile migration using local state prefs.
+        # Clobbering local state with Lacros enabled will re-initiate Lacros
+        # profile migration and effectively wipe the existing profile. In
+        # addition, the profile migration involves restarting Ash and
+        # CrOSBrowserBackend will lose its DevTools connection.
+        #
+        # Without knowing what clear_enterprise_policy specifically seeks to
+        # remove from local state, our solution here is to remove everything
+        # except the Lacros migration bits.
+        local_state = json.loads(cri.GetFileContents(local_state_path))
+        for key in list(local_state.keys()):
+          if not key == 'lacros':
+            del local_state[key]
+        cri.PushContents(json.dumps(local_state, separators=(',',':')),
+                         local_state_path)
+      else:
+        cri.RmRF(local_state_path)
+
     def browser_ready():
       return cri.GetChromePid() is not None
 
-    cri.RestartUI(self._browser_options.clear_enterprise_policy)
+    cri.RestartUI()
     py_utils.WaitFor(browser_ready, timeout=20)
 
     # Delete test user's cryptohome vault (user data directory).
@@ -151,17 +177,19 @@ class PossibleCrOSBrowser(possible_browser.PossibleBrowser):
     os_browser_backend.Start(startup_args)
 
     if self._app_type == 'lacros-chrome':
-      lacros_chrome_browser_backend = lacros_browser_backend.LacrosBrowserBackend(
-          self._platform_backend, self._browser_options,
-          self.browser_directory, self.profile_directory,
-          self._DEFAULT_CHROME_ENV,
-          os_browser_backend,
-          build_dir=self._build_dir)
+      lacros_chrome_browser_backend = (
+          lacros_browser_backend.LacrosBrowserBackend(
+              self._platform_backend,
+              self._browser_options,
+              self.browser_directory,
+              self.profile_directory,
+              self._DEFAULT_CHROME_ENV,
+              os_browser_backend,
+              build_dir=self._build_dir))
       return browser.Browser(
           lacros_chrome_browser_backend, self._platform_backend, startup_args)
-    else:
-      return browser.Browser(
-          os_browser_backend, self._platform_backend, startup_args)
+    return browser.Browser(os_browser_backend, self._platform_backend,
+                           startup_args)
 
   def GetBrowserStartupArgs(self, browser_options):
     startup_args = chrome_startup_args.GetFromBrowserOptions(browser_options)
@@ -229,8 +257,8 @@ def SelectDefaultBrowser(possible_browsers):
 
 
 def CanFindAvailableBrowsers(finder_options):
-  return (cros_device.IsRunningOnCrOS() or finder_options.cros_remote or
-          cros_interface.HasSSH())
+  return (cros_device.IsRunningOnCrOS() or finder_options.remote or
+          linux_based_interface.HasSSH())
 
 
 def FindAllBrowserTypes():
@@ -266,24 +294,24 @@ def FindAllAvailableBrowsers(finder_options, device):
   # Check ssh
   try:
     plat = platform_module.GetPlatformForDevice(device, finder_options)
-  except cros_interface.LoginException as ex:
-    if isinstance(ex, cros_interface.KeylessLoginRequiredException):
-      logging.warn('Could not ssh into %s. Your device must be configured',
-                   finder_options.cros_remote)
-      logging.warn('to allow passwordless login as root.')
-      logging.warn('For a test-build device, pass this to your script:')
-      logging.warn('   --identity $(CHROMITE)/ssh_keys/testing_rsa')
-      logging.warn('')
-      logging.warn('For a developer-mode device, the steps are:')
-      logging.warn(' - Ensure you have an id_rsa.pub (etc) on this computer')
-      logging.warn(' - On the chromebook:')
-      logging.warn('   -  Control-Alt-T; shell; sudo -s')
-      logging.warn('   -  openssh-server start')
-      logging.warn('   -  scp <this machine>:.ssh/id_rsa.pub /tmp/')
-      logging.warn('   -  mkdir /root/.ssh')
-      logging.warn('   -  chown go-rx /root/.ssh')
-      logging.warn('   -  cat /tmp/id_rsa.pub >> /root/.ssh/authorized_keys')
-      logging.warn('   -  chown 0600 /root/.ssh/authorized_keys')
+  except linux_based_interface.LoginException as ex:
+    if isinstance(ex, linux_based_interface.KeylessLoginRequiredException):
+      logging.warning('Could not ssh into %s. Your device must be configured',
+                      finder_options.remote)
+      logging.warning('to allow passwordless login as root.')
+      logging.warning('For a test-build device, pass this to your script:')
+      logging.warning('   --identity $(CHROMITE)/ssh_keys/testing_rsa')
+      logging.warning('')
+      logging.warning('For a developer-mode device, the steps are:')
+      logging.warning(' - Ensure you have an id_rsa.pub (etc) on this computer')
+      logging.warning(' - On the chromebook:')
+      logging.warning('   -  Control-Alt-T; shell; sudo -s')
+      logging.warning('   -  openssh-server start')
+      logging.warning('   -  scp <this machine>:.ssh/id_rsa.pub /tmp/')
+      logging.warning('   -  mkdir /root/.ssh')
+      logging.warning('   -  chown go-rx /root/.ssh')
+      logging.warning('   -  cat /tmp/id_rsa.pub >> /root/.ssh/authorized_keys')
+      logging.warning('   -  chown 0600 /root/.ssh/authorized_keys')
     raise browser_finder_exceptions.BrowserFinderException(str(ex))
 
   browsers.extend([

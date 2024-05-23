@@ -5,15 +5,16 @@
 from __future__ import print_function
 from __future__ import absolute_import
 import datetime
-import hashlib
+import io
 import logging
 import os
 import os.path
+import platform
 import random
 import re
 import shutil
 import signal
-import subprocess as subprocess
+import subprocess
 import sys
 import tempfile
 
@@ -39,7 +40,7 @@ class DesktopBrowserBackend(chrome_browser_backend.ChromeBrowserBackend):
                browser_directory, profile_directory,
                executable, flash_path, is_content_shell,
                build_dir=None):
-    super(DesktopBrowserBackend, self).__init__(
+    super().__init__(
         desktop_platform_backend,
         browser_options=browser_options,
         browser_directory=browser_directory,
@@ -79,6 +80,32 @@ class DesktopBrowserBackend(chrome_browser_backend.ChromeBrowserBackend):
   @property
   def log_file_path(self):
     return self._log_file_path
+
+  @property
+  def processes(self):
+    class Process:
+      def __init__(self, s):
+        # We want to get 3 pieces of information from 'ps aux':
+        # - PID of the processes
+        # - Type of process (e.g. 'renderer', etc)
+        # - RSS of the process
+        self.name = re.search(r'--type=(\w+)', s).group(1)
+        self.pid = re.search(r' (\d+) ', s).group(1)
+        # For RSS, we need a more complicated pattern, since multiple parts of
+        # the output are just digits.
+        REGEXP = (r'\d+\.\d+'  # %CPU
+                  r'\s+'
+                  r'\d+\.\d+'  # %MEM
+                  r'\s+'
+                  r'\d+'       # VSZ
+                  r'\s+'
+                  r'(\d+)')
+        EXAMPLE = ('root           1  0.0  0.0 166760 12228 ?'
+                   '        Ss   01:50   0:14 /sbin/init splash')
+        assert re.search(REGEXP, EXAMPLE).group(1) == '12228'
+        self.rss = re.search(REGEXP, s).group(1)
+    tmp = subprocess.getoutput('ps -aux | grep chrome')
+    return [Process(line) for line in tmp.split('\n') if '--type=' in line]
 
   @property
   def supports_uploading_logs(self):
@@ -142,6 +169,16 @@ class DesktopBrowserBackend(chrome_browser_backend.ChromeBrowserBackend):
 
     cmd = [self._executable]
     if self.browser.platform.GetOSName() == 'mac':
+      if int(os.environ.get('START_BROWSER_WITH_DEFAULT_PRIORITY', '0')):
+        # Start chrome on mac using `open`, when running benchmarks
+        # so that it starts with default priority. See crbug/1454294
+        executable_path = self._executable
+        macos_version =  platform.mac_ver()[0]
+        macos_major_version = int(macos_version[:macos_version.find('.')])
+        # `open` seem to require absolute paths for mac version 13+
+        if macos_major_version>= 13:
+          executable_path = os.path.abspath(self._executable)
+        cmd = ['open', '-n', '-W', '-a', executable_path, '--args']
       cmd.append('--use-mock-keychain')  # crbug.com/865247
     cmd.extend(startup_args)
     cmd.append('about:blank')
@@ -157,8 +194,8 @@ class DesktopBrowserBackend(chrome_browser_backend.ChromeBrowserBackend):
     for name in ('LC_ALL', 'LC_MESSAGES', 'LANG'):
       encoding = 'en_US.UTF-8'
       if env.get(name, encoding) != encoding:
-        logging.warn('Overriding env[%s]=="%s" with default value "%s"',
-                     name, env[name], encoding)
+        logging.warning('Overriding env[%s]=="%s" with default value "%s"',
+                        name, env[name], encoding)
       env[name] = 'en_US.UTF-8'
 
     self.LogStartCommand(cmd, env)
@@ -168,7 +205,22 @@ class DesktopBrowserBackend(chrome_browser_backend.ChromeBrowserBackend):
       self._proc = subprocess.Popen(
           cmd, stdout=self._tmp_output_file, stderr=subprocess.STDOUT, env=env)
     else:
-      self._proc = subprocess.Popen(cmd, env=env)
+      # There is weird behavior on Windows where stream redirection does not
+      # work as expected if we let the subprocess use the defaults. This results
+      # in browser logging not being visible on Windows on swarming. Explicitly
+      # setting the streams works around this. The except is in case we are
+      # being run through typ, whose _TeedStream replaces the default streams.
+      # This can't be used for subprocesses since it is all in-memory, and thus
+      # does not have a fileno.
+      if sys.platform == 'win32':
+        try:
+          self._proc = subprocess.Popen(
+              cmd, stdout=sys.stdout, stderr=sys.stderr, env=env)
+        except io.UnsupportedOperation:
+          self._proc = subprocess.Popen(
+              cmd, stdout=sys.__stdout__, stderr=sys.__stderr__, env=env)
+      else:
+        self._proc = subprocess.Popen(cmd, env=env)
 
     self.BindDevToolsClient()
     # browser is foregrounded by default on Windows and Linux, but not Mac.
@@ -203,7 +255,7 @@ class DesktopBrowserBackend(chrome_browser_backend.ChromeBrowserBackend):
     if not self.IsBrowserRunning():
       raise exceptions.ProcessGoneException(
           'Return code: %d' % self._proc.returncode)
-    super(DesktopBrowserBackend, self).BindDevToolsClient()
+    super().BindDevToolsClient()
 
   def GetPid(self):
     if self._proc:
@@ -243,8 +295,7 @@ class DesktopBrowserBackend(chrome_browser_backend.ChromeBrowserBackend):
       # We assume that if there are more than 10 symbols the executable is not
       # stripped.
       return num_symbols < 10
-    else:
-      return False
+    return False
 
   def _GetStackFromMinidump(self, minidump):
     # Create an executable-specific directory if necessary to store symbols
@@ -258,33 +309,8 @@ class DesktopBrowserBackend(chrome_browser_backend.ChromeBrowserBackend):
         self._dump_finder, self.build_dir, symbols_dir=symbols_dir)
     return dump_symbolizer.SymbolizeMinidump(minidump)
 
-  def _CreateExecutableUniqueDirectory(self, prefix):
-    """Creates a semi-permanent directory unique to the browser executable.
-
-    This directory will persist between different tests, and potentially
-    be available between different test suites, but is liable to be cleaned
-    up by the OS at any point outside of a test suite's run.
-
-    Args:
-      prefix: A string to include before the unique identifier in the
-          directory name.
-
-    Returns:
-      A string containing an absolute path to the created directory.
-    """
-    hashfunc = hashlib.sha1()
-    with open(self._executable, 'rb') as infile:
-      hashfunc.update(infile.read())
-    symbols_dirname = prefix + hashfunc.hexdigest()
-    # We can't use mkdtemp() directly since that will result in the directory
-    # being different, and thus not shared. So, create an unused directory
-    # and use the same parent directory.
-    unused_dir = tempfile.mkdtemp().rstrip(os.path.sep)
-    symbols_dir = os.path.join(os.path.dirname(unused_dir), symbols_dirname)
-    if not os.path.exists(symbols_dir) or not os.path.isdir(symbols_dir):
-      os.makedirs(symbols_dir)
-    shutil.rmtree(unused_dir)
-    return symbols_dir
+  def _GetBrowserExecutablePath(self):
+    return self._executable
 
   def _UploadMinidumpToCloudStorage(self, minidump_path):
     """ Upload minidump_path to cloud storage and return the cloud storage url.
@@ -331,9 +357,9 @@ class DesktopBrowserBackend(chrome_browser_backend.ChromeBrowserBackend):
           # 'CHROME_SHUTDOWN_TIMEOUT' environment variable.
           # TODO(sebmarchand): Remove this now that there's an option to shut
           # down Chrome via Devtools.
-          py_utils.WaitFor(lambda: not self.IsBrowserRunning(),
-                           timeout=int(os.getenv('CHROME_SHUTDOWN_TIMEOUT', 15))
-                          )
+          py_utils.WaitFor(
+              lambda: not self.IsBrowserRunning(),
+              timeout=int(os.getenv('CHROME_SHUTDOWN_TIMEOUT', '15')))
           logging.info('Successfully shut down browser cooperatively')
         except py_utils.TimeoutException as e:
           logging.warning('Failed to cooperatively shutdown. ' +
@@ -344,7 +370,7 @@ class DesktopBrowserBackend(chrome_browser_backend.ChromeBrowserBackend):
 
   @exc_util.BestEffort
   def Close(self):
-    super(DesktopBrowserBackend, self).Close()
+    super().Close()
 
     # First, try to cooperatively shutdown.
     if self.IsBrowserRunning():
@@ -357,7 +383,7 @@ class DesktopBrowserBackend(chrome_browser_backend.ChromeBrowserBackend):
       self._proc.send_signal(signal.SIGINT)
       try:
         py_utils.WaitFor(lambda: not self.IsBrowserRunning(),
-                         timeout=int(os.getenv('CHROME_SHUTDOWN_TIMEOUT', 5))
+                         timeout=int(os.getenv('CHROME_SHUTDOWN_TIMEOUT', '5'))
                         )
         self._proc = None
       except py_utils.TimeoutException:

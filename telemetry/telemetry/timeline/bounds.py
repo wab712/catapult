@@ -2,7 +2,7 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
-class Bounds(object):
+class Bounds():
   """Represents a min-max bounds."""
   def __init__(self):
     self.is_empty_ = True
@@ -18,8 +18,7 @@ class Bounds(object):
   def __repr__(self):
     if self.is_empty_:
       return "Bounds()"
-    else:
-      return "Bounds(min=%s,max=%s)" % (self.min_, self.max_)
+    return "Bounds(min=%s,max=%s)" % (self.min_, self.max_)
 
   @property
   def is_empty(self):

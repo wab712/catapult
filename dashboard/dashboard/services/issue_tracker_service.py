@@ -12,6 +12,7 @@ import logging
 
 from apiclient import discovery
 from apiclient import errors
+from dashboard.common import utils
 
 _DISCOVERY_URI = ('https://monorail-prod.appspot.com'
                   '/_ah/api/discovery/v1/apis/{api}/{apiVersion}/rest')
@@ -21,10 +22,10 @@ MAX_DISCOVERY_RETRIES = 3
 MAX_REQUEST_RETRIES = 5
 
 
-class IssueTrackerService(object):
+class IssueTrackerService:
   """Class for updating bug issues."""
 
-  def __init__(self, http):
+  def __init__(self):
     """Initializes an object for adding and updating bugs on the issue tracker.
 
     This object can be re-used to make multiple requests without calling
@@ -37,6 +38,7 @@ class IssueTrackerService(object):
       http: A Http object that requests will be made through; this should be an
           Http object that's already authenticated via OAuth2.
     """
+    http = utils.ServiceAccountHttp()
     http.timeout = 30
 
     # Retry connecting at least 3 times.
@@ -166,13 +168,13 @@ class IssueTrackerService(object):
         if 'cc' in body['updates']:
           del body['updates']['cc']
         return self._MakeCommentRequest(bug_id, body, retry=False)
-      elif retry and 'Issue owner must be a project member' in reason:
+      if retry and 'Issue owner must be a project member' in reason:
         # Remove the owner but retain the cc list.
         if 'owner' in body['updates']:
           del body['updates']['owner']
         return self._MakeCommentRequest(bug_id, body, retry=False)
       # This error reason is received when issue is deleted.
-      elif 'User is not allowed to view this issue' in reason:
+      if 'User is not allowed to view this issue' in reason:
         logging.warning('Unable to update bug %s with body %s', bug_id, body)
         return True
     logging.error(
@@ -319,7 +321,8 @@ class IssueTrackerService(object):
     Returns:
       The response if there was one, or else None.
     """
-    response = request.execute(num_retries=MAX_REQUEST_RETRIES)
+    response = request.execute(
+        num_retries=MAX_REQUEST_RETRIES, http=utils.ServiceAccountHttp())
     return response
 
 

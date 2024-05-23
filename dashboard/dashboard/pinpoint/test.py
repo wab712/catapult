@@ -21,7 +21,7 @@ CHROMIUM_URL = 'https://chromium.googlesource.com/chromium/src'
 class TestCase(testing_common.TestCase):
 
   def setUp(self):
-    super(TestCase, self).setUp()
+    super().setUp()
     self._SetUpTestApp()
     self._SetUpStubs()
     self._PopulateData()
@@ -30,6 +30,7 @@ class TestCase(testing_common.TestCase):
   def _SetUpTestApp(self):
     self.testapp = webtest.TestApp(dispatcher.APP)
     self.testapp.extra_environ.update({'REMOTE_ADDR': 'remote_ip'})
+    self.testapp.extra_environ.update({'APPLICATION_ID': 'testbed-test'})
 
   def _SetUpStubs(self):
     patcher = mock.patch('dashboard.services.gitiles_service.CommitInfo')
@@ -197,7 +198,7 @@ def _CommitRangeStub(repository_url, first_git_hash, last_git_hash):
     commit_tree = [{
         'git_hash': 'mc_100',
         'parents': ['mc_99', 'oc_99']
-    }] + [c for c in _Interleave(branch_other, branch_master)]
+    }] + list(_Interleave(branch_other, branch_master))
     return [_InfoStubWithParents(commit) for commit in commit_tree]
 
   # From here we use the default algorithm for generating a linear range of

@@ -30,7 +30,7 @@ class SharedPageState(story_module.SharedState):
   _device_type = None
 
   def __init__(self, test, finder_options, story_set, possible_browser):
-    super(SharedPageState, self).__init__(
+    super().__init__(
         test, finder_options, story_set, possible_browser)
     self._page_test = None
     if issubclass(type(test), legacy_page_test.LegacyPageTest):
@@ -45,6 +45,10 @@ class SharedPageState(story_module.SharedState):
     if (self._device_type == 'desktop' and
         platform_module.GetHostPlatform().GetOSName() == 'chromeos'):
       self._device_type = 'chromeos'
+    if (possible_browser.browser_type == 'web-engine-shell' or
+        possible_browser.browser_type == 'fuchsia-chrome' or
+        possible_browser.browser_type == 'cast-streaming-shell'):
+      self._device_type = None
 
     browser_options = finder_options.browser_options
     browser_options.browser_user_agent_type = self._device_type
@@ -144,10 +148,11 @@ class SharedPageState(story_module.SharedState):
     This should return False in most situations in order to help maitain
     independence between measurements taken on different story runs.
 
-    The default implementation only allows reusing the browser in ChromeOs,
+    Previously, we only reused the browser for ChromeOS,
     where bringing up the browser for each story is expensive.
+    However, this is causing some tests to break.
     """
-    return self.platform.GetOSName() == 'chromeos'
+    return False
 
   @property
   def platform(self):
@@ -190,8 +195,9 @@ class SharedPageState(story_module.SharedState):
       self._finder_options.browser_options.trim_logs = True
     self._AllowInteractionForStage('after-start-browser')
 
-  def WillRunStory(self, page):
+  def WillRunStory(self, story):
     reusing_browser = self.browser is not None
+    page = story
     # Make sure we don't have accidentally diverging browser args.
     if reusing_browser and self._extra_browser_args != page._extra_browser_args:
       self._StopBrowser()
@@ -257,9 +263,9 @@ class SharedPageState(story_module.SharedState):
 
     self._AllowInteractionForStage('before-run-story')
 
-  def CanRunStory(self, page):
+  def CanRunStory(self, story):
     return self.CanRunOnBrowser(browser_info_module.BrowserInfo(self.browser),
-                                page)
+                                story)
 
   def CanRunOnBrowser(self, browser_info, page):
     """Override this to return whether the browser brought up by this state

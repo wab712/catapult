@@ -4,7 +4,6 @@
 
 # pylint: disable=unused-argument
 
-import six
 import mock
 
 from pyfakefs import fake_filesystem_unittest
@@ -152,7 +151,7 @@ class DependencyManagerTest(fake_filesystem_unittest.TestCase):
                             dep3: {plat3: dep_info}}
 
     dep_manager._UpdateDependencies(base_config_mock)
-    six.assertCountEqual(self, expected_lookup_dict, dep_manager._lookup_dict)
+    self.assertCountEqual(expected_lookup_dict, dep_manager._lookup_dict)
     self.assertFalse(dep_info.Update.called)
     self.assertFalse(dep_info_a.Update.called)
     self.assertFalse(dep_info_b.Update.called)
@@ -251,7 +250,7 @@ class DependencyManagerTest(fake_filesystem_unittest.TestCase):
                             dep1: {plat1: dep_info_c}}
 
     dep_manager._UpdateDependencies(base_config_mock)
-    six.assertCountEqual(self, expected_lookup_dict, dep_manager._lookup_dict)
+    self.assertCountEqual(expected_lookup_dict, dep_manager._lookup_dict)
     dep_info_a.Update.assert_called_once_with(dep_info)
     self.assertFalse(dep_info.Update.called)
     self.assertFalse(dep_info_b.Update.called)
@@ -472,8 +471,8 @@ class DependencyManagerTest(fake_filesystem_unittest.TestCase):
     self.assertRaises(cloud_storage.CloudStorageError,
                       dep_manager.FetchPath, 'dep', 'platform')
 
-    cs_path_mock.side_effect = cloud_storage.PermissionError
-    self.assertRaises(cloud_storage.PermissionError,
+    cs_path_mock.side_effect = cloud_storage.CloudStoragePermissionError
+    self.assertRaises(cloud_storage.CloudStoragePermissionError,
                       dep_manager.FetchPath, 'dep', 'platform')
 
   def testLocalPath(self):
@@ -525,4 +524,3 @@ class DependencyManagerTest(fake_filesystem_unittest.TestCase):
                                 'dep2': mock.MagicMock()}
     self.assertRaises(exceptions.NoPathFoundError,
                       dep_manager.LocalPath, 'dependency', 'platform')
-

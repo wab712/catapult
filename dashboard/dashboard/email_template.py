@@ -8,7 +8,8 @@ from __future__ import absolute_import
 
 import logging
 import re
-import urllib
+import six
+import six.moves.urllib.parse
 
 from google.appengine.api import urlfetch
 
@@ -178,7 +179,8 @@ def _GetSheriffOnDutyEmail(subscription):
     logging.error('Response %d from %s for %s.', response.status_code,
                   subscription.rotation_url, subscription.name)
     return None
-  match = re.match(r'document\.write\(\'(.*)\'\)', response.content)
+  match = re.match(r'document\.write\(\'(.*)\'\)',
+                   six.ensure_str(response.content))
   if not match:
     logging.error('Could not parse response from subscription URL %s: %s',
                   subscription.rotation_url, response.content)
@@ -200,7 +202,7 @@ def GetReportPageLink(test_path, rev=None, add_protocol_and_host=True):
     link_template = 'https://chromeperf.appspot.com/report?%s'
   else:
     link_template = '/report?%s'
-  uri = link_template % urllib.urlencode([
+  uri = link_template % six.moves.urllib.parse.urlencode([
       ('masters', master),
       ('bots', bot),
       ('tests', test_name),
@@ -216,7 +218,7 @@ def GetGroupReportPageLink(alert):
   # Entities only have a key if they have already been put().
   if alert and alert.key:
     link_template = 'https://chromeperf.appspot.com/group_report?keys=%s'
-    return link_template % alert.key.urlsafe()
+    return link_template % six.ensure_str(alert.key.urlsafe())
   # If we can't make the above link, fall back to the /report page.
   test_path = utils.TestPath(alert.GetTestMetadataKey())
   return GetReportPageLink(test_path, rev=alert.end_revision)

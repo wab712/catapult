@@ -20,16 +20,16 @@ _TEST_URL = example_domain.HTTP_EXAMPLE
 
 class CacheTemperatureTests(browser_test_case.BrowserTestCase):
   def __init__(self, *args, **kwargs):
-    super(CacheTemperatureTests, self).__init__(*args, **kwargs)
+    super().__init__(*args, **kwargs)
     self.markers = None
 
   def setUp(self):
-    super(CacheTemperatureTests, self).setUp()
+    super().setUp()
     self._browser.platform.network_controller.StartReplay(
         example_domain.FetchExampleDomainArchive())
 
   def tearDown(self):
-    super(CacheTemperatureTests, self).tearDown()
+    super().tearDown()
     self._browser.platform.network_controller.StopReplay()
 
   @contextlib.contextmanager
@@ -188,7 +188,9 @@ class CacheTemperatureTests(browser_test_case.BrowserTestCase):
   @decorators.Disabled('reference')
   @decorators.Enabled('has tabs')
   @decorators.Disabled('chromeos')  # crbug.com/840033
-  @decorators.Disabled('win')  # crbug.com/840033
+  @decorators.Disabled('win')       # crbug.com/840033
+  @decorators.Disabled('linux')     # crbug.com/1394993
+  @decorators.Disabled('mac')       # crbug.com/1394993
   def testEnsureWarmBrowser(self):
     with self.CaptureTraceMarkers():
       story_set = story.StorySet()
@@ -210,6 +212,8 @@ class CacheTemperatureTests(browser_test_case.BrowserTestCase):
   @decorators.Enabled('has tabs')
   @decorators.Disabled('chromeos')  # crbug.com/840033
   @decorators.Disabled('win')  # crbug.com/840033
+  @decorators.Disabled('mac') # crbug.com/1394632
+  @decorators.Disabled('linux') # crbug.com/1394632
   def testEnsureHotBrowser(self):
     with self.CaptureTraceMarkers():
       story_set = story.StorySet()

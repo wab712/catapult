@@ -69,6 +69,16 @@ _MAP_TO_USER_FRIENDLY_DEVICE_NAMES = {
     'AOSP on Shamu': 'nexus 6',
     'AOSP on BullHead': 'nexus 5x'
 }
+_NON_ROOT_OVERRIDES = {
+    # The Samsung A23 uses the legacy sdcardfs which allows us to read/remove
+    # the profile directory directly without root. This allows the device to
+    # use the same code path as a rooted device as long as a particular public
+    # directory is used. See crbug.com/1383609 for more background on this.
+    'SM-A235M': {
+        'profile_dir': '/sdcard/Android/data',
+        'clear_application_state': False,
+    },
+}
 _DEVICE_COPY_SCRIPT_FILE = os.path.abspath(os.path.join(
     os.path.dirname(__file__), 'efficient_android_directory_copy.sh'))
 _DEVICE_COPY_SCRIPT_LOCATION = (
@@ -77,7 +87,7 @@ _DEVICE_MEMTRACK_HELPER_LOCATION = '/data/local/tmp/profilers/memtrack_helper'
 _DEVICE_CLEAR_SYSTEM_CACHE_TOOL_LOCATION = '/data/local/tmp/clear_system_cache'
 
 
-class _VideoRecorder(object):
+class _VideoRecorder():
   def __init__(self):
     self._stop_recording_signal = threading.Event()
     self._recording_path = None
@@ -118,8 +128,13 @@ class AndroidPlatformBackend(
   def __init__(self, device, require_root):
     assert device, (
         'AndroidPlatformBackend can only be initialized from remote device')
-    super(AndroidPlatformBackend, self).__init__(device)
+    super().__init__(device)
     self._device = device_utils.DeviceUtils(device.device_id)
+    # Disable Play Store on Android devices.
+    if self._device.IsApplicationInstalled('com.android.vending'):
+      self._device.RunShellCommand(
+        ['pm', 'disable-user', 'com.android.vending'],
+        check_return=True)
     self._can_elevate_privilege = False
     self._require_root = require_root
     if self._require_root:
@@ -171,6 +186,10 @@ class AndroidPlatformBackend(
   @property
   def device(self):
     return self._device
+
+  @property
+  def require_root(self):
+    return self._require_root
 
   def Initialize(self):
     self.EnsureBackgroundApkInstalled()
@@ -240,7 +259,7 @@ class AndroidPlatformBackend(
 
   def StopDisplayTracing(self):
     if not self._surface_stats_collector:
-      return
+      return None
 
     try:
       refresh_period, timestamps = self._surface_stats_collector.Stop()
@@ -294,7 +313,7 @@ class AndroidPlatformBackend(
     if performance_mode == android_device.KEEP_PERFORMANCE_MODE:
       logging.info('Keeping device performance settings intact.')
       return
-    elif performance_mode == android_device.HIGH_PERFORMANCE_MODE:
+    if performance_mode == android_device.HIGH_PERFORMANCE_MODE:
       logging.info('Setting high performance mode.')
       self._perf_tests_setup.SetHighPerfMode()
     elif performance_mode == android_device.NORMAL_PERFORMANCE_MODE:
@@ -370,7 +389,7 @@ class AndroidPlatformBackend(
     return self._device.GetProp('ro.build.id')[0]
 
   def GetOSVersionDetailString(self):
-    return ''  # TODO(kbr): Implement this.
+    return self._device.GetProp('ro.build.id')
 
   def GetDeviceHostClockOffset(self):
     """Returns the difference between the device and host clocks."""
@@ -402,7 +421,8 @@ class AndroidPlatformBackend(
 
   def FlushDnsCache(self):
     self._device.RunShellCommand(
-        ['ndc', 'resolver', 'flushdefaultif'], as_root=True, check_return=True)
+        ['ndc', 'resolver', 'flushdefaultif'],
+        as_root=True, check_return=self._require_root)
 
   def StopApplication(self, application):
     """Stop the given |application|.
@@ -568,6 +588,21 @@ class AndroidPlatformBackend(
         profile is to be deleted.
       ignore_list: List of files to keep.
     """
+    # If we don't have root, then we are almost certainly actually using the
+    # default profile directory instead of the one we return from GetProfileDir.
+    # This current best guess for this behavior is that it is due to SELinux,
+    # as a non-root-readable directory will not be usable by the browser due to
+    # SELinux security contexts/permissions. So, clear the default directory by
+    # wiping the application state. We still go through the regular profile
+    # directory deletion afterwards on the off chance that we are somehow using
+    # the non-default directory.
+    if not self._require_root and _NON_ROOT_OVERRIDES.get(
+        self.GetDeviceTypeName(), {}).get('clear_application_state', True):
+      # We specify to wait for the asynchronous intent since there have been
+      # known problems with it deleting data out from under a test. See
+      # crbug.com/1383609 for an example.
+      self._device.ClearApplicationState(
+          package, wait_for_asynchronous_intent=True)
     profile_dir = self.GetProfileDir(package)
     if not self._device.PathExists(profile_dir):
       return
@@ -588,8 +623,15 @@ class AndroidPlatformBackend(
     """
     if self._require_root:
       return '/data/data/%s/' % package
-    else:
-      return '/data/local/tmp/%s/' % package
+    # We use a public location to ensure minidumps can be pulled without root.
+    # /data/local/tmp/package/ seems like it would be more fitting, but for
+    # some reason (maybe related to SELinux), using that directory does not
+    # work. If the package directory doesn't exist, then Chromium ends up
+    # defaulting to /data/data/package/ instead. If the directory does exist,
+    # Chromium ends up segfaulting somewhere.
+    profile_dir = _NON_ROOT_OVERRIDES.get(
+        self.GetDeviceTypeName(), {}).get('profile_dir', '/sdcard/Download')
+    return posixpath.join(profile_dir, package) + '/'
 
   def GetDumpLocation(self, package):
     """Returns the location where crash dumps should be written to.
@@ -631,11 +673,10 @@ class AndroidPlatformBackend(
           uline = six.text_type(line, encoding='utf-8')
           # unicode -> str (ASCII with special characters encoded)
           return uline.encode('ascii', 'backslashreplace')
-        else:
-          # str -> bytes (ASCII with special characters encoded)
-          bline = line.encode('ascii', 'backslashreplace')
-          # bytes -> str
-          return bline.decode('ascii')
+        # str -> bytes (ASCII with special characters encoded)
+        bline = line.encode('ascii', 'backslashreplace')
+        # bytes -> str
+        return bline.decode('ascii')
       except Exception: # pylint: disable=broad-except
         logging.error('Error encoding UTF-8 logcat line as ASCII.')
         return '<MISSING LOGCAT LINE: FAILED TO ENCODE>'
@@ -663,8 +704,9 @@ class AndroidPlatformBackend(
       arch = _ARCH_TO_STACK_TOOL_ARCH.get(arch, arch)
       cmd.append('--arch=%s' % arch)
       cmd.append('--output-directory=%s' % self._build_dir)
-      p = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE)
-      return p.communicate(input=six.ensure_binary(logcat))[0]
+      p = subprocess.Popen(
+          cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+      return p.communicate(input=six.ensure_text(logcat))[0]
 
     return None
 
@@ -758,10 +800,9 @@ class AndroidPlatformBackend(
           if key == 'mHasBeenInactive':
             if value == 'true':
               return True
-            elif value == 'false':
+            if value == 'false':
               return False
-            else:
-              raise ValueError('Unknown value for %s: %s' % (key, value))
+            raise ValueError('Unknown value for %s: %s' % (key, value))
     raise exceptions.AndroidDeviceParsingError(str(input_methods))
 
   def IsScreenLocked(self):
@@ -787,10 +828,10 @@ class AndroidPlatformBackend(
     if controller.IsSupported():
       controller.LetCpuCoolToTemperature(temp)
     else:
-      logging.warn('CPU temperature cooling delay - '
-                   'CPU temperature cannot be read: Either the current '
-                   'device is not supported or the specified temperature '
-                   'zones do not exist.')
+      logging.warning('CPU temperature cooling delay - '
+                      'CPU temperature cannot be read: Either the current '
+                      'device is not supported or the specified temperature '
+                      'zones do not exist.')
 
 
 def _FixPossibleAdbInstability():
@@ -809,7 +850,7 @@ def _FixPossibleAdbInstability():
         if 'adb' in process.name:
           process.set_cpu_affinity([0])
     except (psutil.NoSuchProcess, psutil.AccessDenied):
-      logging.warn('Failed to set adb process CPU affinity')
+      logging.warning('Failed to set adb process CPU affinity')
 
 
 def _BuildEvent(cat, name, ph, pid, ts, args):

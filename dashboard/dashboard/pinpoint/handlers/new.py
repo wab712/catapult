@@ -9,9 +9,15 @@ from __future__ import absolute_import
 import json
 import logging
 import shlex
+import six
+import uuid
+
+from flask import request
 
 from dashboard.api import api_request_handler
+from dashboard.api import api_auth
 from dashboard.common import bot_configurations
+from dashboard.common import cloud_metric
 from dashboard.common import utils
 from dashboard.pinpoint.models import change
 from dashboard.pinpoint.models import errors
@@ -28,8 +34,10 @@ _ERROR_TAGS_DICT = 'Tags must be a dict of key/value string pairs.'
 _ERROR_UNSUPPORTED = 'This benchmark (%s) is unsupported.'
 _ERROR_PRIORITY = 'Priority must be an integer.'
 
+_EXTRA_BROWSER_ARGS_PREFIX = '--extra-browser-args'
+_ENABLE_FEATURES_PREFIX = '--enable-features'
+
 REGULAR_TELEMETRY_TESTS = {
-    'performance_weblayer_test_suite',
     'performance_webview_test_suite',
 }
 SUFFIXED_REGULAR_TELEMETRY_TESTS = {
@@ -41,13 +49,13 @@ SUFFIXES = {
     '_android_chrome',
     '_android_monochrome',
     '_android_monochrome_bundle',
-    '_android_weblayer',
     '_android_webview',
     '_android_clank_chrome',
     '_android_clank_monochrome',
     '_android_clank_monochrome_64_32_bundle',
     '_android_clank_monochrome_bundle',
     '_android_clank_trichrome_bundle',
+    '_android_clank_trichrome_chrome_google_64_32_bundle',
     '_android_clank_trichrome_webview',
     '_android_clank_trichrome_webview_bundle',
     '_android_clank_webview',
@@ -58,35 +66,54 @@ REGULAR_TELEMETRY_TESTS_WITH_FALLBACKS = {}
 for test in SUFFIXED_REGULAR_TELEMETRY_TESTS:
   for suffix in SUFFIXES:
     REGULAR_TELEMETRY_TESTS_WITH_FALLBACKS[test + suffix] = test
+# crbug/1439658:
+# Add fallback from _android_clank_monochrome to _android_clank_chrome.
+# We will use _android_clank_monochrome to replace _android_clank_chrome
+# to reduce build time. The change in chromium will break pinpoint as pinpoint
+# jobs running on the new commits will look for _android_clank_monochrome which
+# pinpoint does not recognize.
+# This will override the value set above, mapping from 'test+suffix' to 'test.
+# The current logic was added two years ago to break performance_test_suite
+# into smaller targets. It should be no longer is use. I added logs in
+# find_isolate.py to catch possible issues.
+_NEW_MONOCHROME_TARGET = 'performance_test_suite_android_clank_monochrome'
+_OLD_CHROME_TARGET = 'performance_test_suite_android_clank_chrome'
+REGULAR_TELEMETRY_TESTS_WITH_FALLBACKS[
+    _NEW_MONOCHROME_TARGET] = _OLD_CHROME_TARGET
+
+_NON_CHROME_TARGETS = ['v8']
 
 
-class New(api_request_handler.ApiRequestHandler):
-  """Handler that cooks up a fresh Pinpoint job."""
-
-  def _CheckUser(self):
-    self._CheckIsLoggedIn()
-    if not utils.IsTryjobUser():
-      raise api_request_handler.ForbiddenError()
-
-  def Post(self):
-    # TODO(dberris): Validate the inputs based on the type of job requested.
-    job = _CreateJob(self.request)
-
-    # We apply the cost-based scheduling at job creation time, so that we can
-    # roll out the feature as jobs come along.
-    scheduler.Schedule(job, scheduler.Cost(job))
-
-    job.PostCreationUpdate()
-
-    return {
-        'jobId': job.job_id,
-        'jobUrl': job.url,
-    }
+def _CheckUser():
+  if utils.IsDevAppserver():
+    return
+  api_auth.Authorize()
+  if not utils.IsTryjobUser():
+    raise api_request_handler.ForbiddenError()
 
 
-def _CreateJob(request):
+@api_request_handler.RequestHandlerDecoratorFactory(_CheckUser)
+@cloud_metric.APIMetric("pinpoint", "/api/new")
+def NewHandlerPost():
+  # TODO(dberris): Validate the inputs based on the type of job requested.
+  job = _CreateJob(request)
+
+  # We apply the cost-based scheduling at job creation time, so that we can
+  # roll out the feature as jobs come along.
+  scheduler.Schedule(job, scheduler.Cost(job))
+
+  job.PostCreationUpdate()
+
+  return {
+      'jobId': job.job_id,
+      'jobUrl': job.url,
+  }
+
+
+def _CreateJob(req):
   """Creates a new Pinpoint job from WebOb request arguments."""
-  original_arguments = request.params.mixed()
+  logging.debug('Received new job request: %s', req)
+  original_arguments = utils.RequestParamsMixed(req)
   logging.debug('Received Params: %s', original_arguments)
 
   # This call will fail if some of the required arguments are not in the
@@ -94,10 +121,17 @@ def _CreateJob(request):
   _ValidateRequiredParams(original_arguments)
 
   arguments = _ArgumentsWithConfiguration(original_arguments)
+  if not arguments.get('target'):
+    arguments['target'] = GetIsolateTarget(
+        arguments.get('configuration', ''), arguments.get('benchmark'))
   logging.debug('Updated Params: %s', arguments)
 
   # Validate arguments and convert them to canonical internal representation.
   quests = _GenerateQuests(arguments)
+
+  # Check target param here
+  if not arguments.get('target'):
+    raise ValueError('Parameter target must not be empty')
 
   # Validate the priority, if it's present.
   priority = _ValidatePriority(arguments.get('priority'))
@@ -118,7 +152,7 @@ def _CreateJob(request):
 
   # If this is a try job, we assume it's higher priority than bisections, so
   # we'll set it at a negative priority.
-  if priority not in arguments and comparison_mode == job_state.TRY:
+  if not priority and comparison_mode == job_state.TRY:
     priority = -1
 
   # TODO(dberris): Make this the default when we've graduated the beta.
@@ -133,30 +167,46 @@ def _CreateJob(request):
 
     # First we check whether there's a quest that's of type 'RunTelemetryTest'.
     is_telemetry_test = any(
-        [isinstance(q, quest_module.RunTelemetryTest) for q in quests])
+        isinstance(q, quest_module.RunTelemetryTest) for q in quests)
     if is_telemetry_test and ('story' not in arguments
                               and 'story_tags' not in arguments):
       raise ValueError(
           'Missing either "story" or "story_tags" as arguments for try jobs.')
 
+  batch_id = arguments.get('batch_id')
+  if batch_id is None or batch_id == '':
+    batch_id = str(uuid.uuid4())
+
+  initial_attempt_count = arguments.get('initial_attempt_count')
+  try:
+    initial_attempt_count = int(initial_attempt_count)
+  except (TypeError, ValueError):
+    initial_attempt_count = None
+
   # Create job.
-  job = job_module.Job.New(
-      quests if not use_execution_engine else (),
-      changes,
-      arguments=original_arguments,
-      bug_id=bug_id,
-      comparison_mode=comparison_mode,
-      comparison_magnitude=comparison_magnitude,
-      gerrit_server=gerrit_server,
-      gerrit_change_id=gerrit_change_id,
-      name=name,
-      pin=pin,
-      tags=tags,
-      user=user,
-      priority=priority,
-      use_execution_engine=use_execution_engine,
-      project=project,
-      batch_id=arguments.get('batch_id'))
+  try:
+    job = job_module.Job.New(
+        quests if not use_execution_engine else (),
+        changes,
+        arguments=original_arguments,
+        bug_id=bug_id,
+        comparison_mode=comparison_mode,
+        comparison_magnitude=comparison_magnitude,
+        gerrit_server=gerrit_server,
+        gerrit_change_id=gerrit_change_id,
+        name=name,
+        pin=pin,
+        tags=tags,
+        user=user,
+        priority=priority,
+        use_execution_engine=use_execution_engine,
+        project=project,
+        batch_id=batch_id,
+        initial_attempt_count=initial_attempt_count,
+        dimensions=arguments.get('dimensions'),
+        swarming_server=arguments.get('swarming_server'))
+  except errors.SwarmingNoBots as e:
+    six.raise_from(ValueError(str(e)), e)
 
   if use_execution_engine:
     # TODO(dberris): We need to figure out a way to get the arguments to be more
@@ -212,21 +262,35 @@ def _ParseExtraArgs(args):
       extra_args = json.loads(args)
     except ValueError:
       extra_args = shlex.split(args)
+  _RearrangeExtraArgs(extra_args)
   return extra_args
+
+
+def _RearrangeExtraArgs(extra_args):
+  n = len(extra_args)
+  for i in range(n):
+    if extra_args[i].startswith(_ENABLE_FEATURES_PREFIX):
+      if i == 0 or extra_args[i-1] != _EXTRA_BROWSER_ARGS_PREFIX:
+        extra_args[i] = _EXTRA_BROWSER_ARGS_PREFIX + '=' + extra_args[i]
 
 
 def _ArgumentsWithConfiguration(original_arguments):
   # "configuration" is a special argument that maps to a list of preset
   # arguments. Pull any arguments from the specified "configuration", if any.
   new_arguments = original_arguments.copy()
-
+  provided_args = new_arguments.get('extra_test_args', '')
+  extra_test_args = []
+  if provided_args:
+    extra_test_args = _ParseExtraArgs(provided_args)
+  new_arguments['extra_test_args'] = json.dumps(extra_test_args)
   configuration = original_arguments.get('configuration')
   if configuration:
     try:
       default_arguments = bot_configurations.Get(configuration)
-    except ValueError:
+    except ValueError as e:
       # Reraise with a clearer message.
-      raise ValueError("Bot Config: %s doesn't exist." % configuration)
+      six.raise_from(
+          ValueError("Bot Config: %s doesn't exist." % configuration), e)
     logging.info('Bot Config: %s', default_arguments)
 
     if default_arguments:
@@ -235,14 +299,6 @@ def _ArgumentsWithConfiguration(original_arguments):
         # we can respect the value set in bot_configurations in addition to
         # those provided from the UI.
         if k == 'extra_test_args':
-          # First, parse whatever is already there. We'll canonicalise the
-          # inputs as a JSON list of strings.
-          provided_args = new_arguments.get('extra_test_args', '')
-          extra_test_args = []
-
-          if provided_args:
-            extra_test_args = _ParseExtraArgs(provided_args)
-
           configured_args = _ParseExtraArgs(v)
           new_arguments['extra_test_args'] = json.dumps(
               extra_test_args + configured_args,)
@@ -262,8 +318,8 @@ def _ValidateBugId(bug_id, project):
     # we might need to update the scopes we're asking for. For now trust that
     # the inputs are valid.
     return int(bug_id), project
-  except ValueError:
-    raise ValueError(_ERROR_BUG_ID)
+  except ValueError as e:
+    raise ValueError(_ERROR_BUG_ID) from e
 
 
 def _ValidatePriority(priority):
@@ -272,8 +328,8 @@ def _ValidatePriority(priority):
 
   try:
     return int(priority)
-  except ValueError:
-    raise ValueError(_ERROR_PRIORITY)
+  except ValueError as e:
+    raise ValueError(_ERROR_PRIORITY) from e
 
 
 def _ValidateChangesForTry(arguments):
@@ -281,12 +337,12 @@ def _ValidateChangesForTry(arguments):
     raise ValueError('base_git_hash is required for try jobs')
 
   commit_1 = change.Commit.FromDict({
-      'repository': arguments.get('repository'),
+      'repository': arguments.get('project') or arguments.get('repository'),
       'git_hash': arguments.get('base_git_hash'),
   })
   commit_2 = change.Commit.FromDict({
       'repository':
-          arguments.get('repository'),
+          arguments.get('project') or arguments.get('repository'),
       'git_hash':
           arguments.get(
               'end_git_hash',
@@ -351,20 +407,19 @@ def _ValidateChanges(comparison_mode, arguments):
       return _ValidateChangesForTry(arguments)
 
     # Everything else that follows only applies to bisections.
-    assert (comparison_mode == job_state.FUNCTIONAL
-            or comparison_mode == job_state.PERFORMANCE)
+    assert comparison_mode in (job_state.FUNCTIONAL, job_state.PERFORMANCE)
 
     if 'start_git_hash' not in arguments or 'end_git_hash' not in arguments:
       raise ValueError(
           'bisections require both a start_git_hash and an end_git_hash')
 
     commit_1 = change.Commit.FromDict({
-        'repository': arguments.get('repository'),
+        'repository': arguments.get('project') or arguments.get('repository'),
         'git_hash': arguments.get('start_git_hash'),
     })
 
     commit_2 = change.Commit.FromDict({
-        'repository': arguments.get('repository'),
+        'repository': arguments.get('project') or arguments.get('repository'),
         'git_hash': arguments.get('end_git_hash'),
     })
 
@@ -380,7 +435,7 @@ def _ValidateChanges(comparison_mode, arguments):
 
     return change_1, change_2
   except errors.BuildGerritURLInvalid as e:
-    raise ValueError(str(e))
+    raise ValueError(str(e)) from e
 
 
 def _ValidatePatch(patch_data):
@@ -388,7 +443,7 @@ def _ValidatePatch(patch_data):
     try:
       patch_details = change.GerritPatch.FromData(patch_data)
     except errors.BuildGerritURLInvalid as e:
-      raise ValueError(str(e))
+      six.raise_from(ValueError(str(e)), e)
     return patch_details.server, patch_details.change
   return None, None
 
@@ -408,6 +463,71 @@ def _ValidateComparisonMagnitude(comparison_magnitude):
   return float(comparison_magnitude)
 
 
+def GetIsolateTarget(bot_name, suite):
+  if suite in _NON_CHROME_TARGETS:
+    return ''
+
+  # ChromeVR
+  if suite.startswith('xr.'):
+    return 'vr_perf_tests'
+
+  # WebRTC perf tests
+  if suite == 'webrtc_perf_tests':
+    return 'webrtc_perf_tests'
+
+  # This is a special-case for webview, which we probably don't need to handle
+  # in the Dashboard (instead should just support in Pinpoint through
+  # configuration).
+  if 'webview' in bot_name.lower():
+    return 'performance_webview_test_suite'
+
+  # Special cases for CrOS tests -
+  # performance_test_suites are device type specific.
+  if 'eve' in bot_name.lower():
+    return 'performance_test_suite_eve'
+  if bot_name == 'lacros-x86-perf':
+    return 'performance_test_suite_octopus'
+
+  # WebEngine tests are specific to Fuchsia devices only.
+  if 'fuchsia-perf' in bot_name.lower():
+    return 'performance_web_engine_test_suite'
+
+  # Each Android binary has its own target, and different bots use different
+  # binaries. Mapping based off of Chromium's
+  # //tools/perf/core/perf_data_generator.py
+  if bot_name in ['android-go-perf', 'android-go-perf-pgo']:
+    return 'performance_test_suite_android_clank_monochrome'
+  if bot_name == 'android-go-wembley-perf':
+    return 'performance_test_suite_android_clank_trichrome_bundle'
+  if bot_name in ['android-new-pixel-perf', 'android-new-pixel-perf-pgo']:
+    return ('performance_test_suite_android_clank_'
+            'trichrome_chrome_google_64_32_bundle')
+  if bot_name in [
+      'android-new-pixel-pro-perf', 'android-new-pixel-pro-perf-pgo'
+  ]:
+    return ('performance_test_suite_android_clank_'
+            'trichrome_chrome_google_64_32_bundle')
+  if bot_name == 'android-pixel2-perf-calibration':
+    return 'performance_test_suite_android_clank_monochrome_64_32_bundle'
+  if bot_name == 'android-pixel2-perf-fyi':
+    return 'performance_test_suite_android_clank_monochrome'
+  if bot_name == 'android-pixel2-perf-aab-fyi':
+    return 'performance_test_suite_android_clank_monochrome_bundle'
+  if bot_name == 'android-pixel2-perf':
+    return 'performance_test_suite_android_clank_monochrome_64_32_bundle'
+  if bot_name in ['android-pixel4-perf', 'android-pixel4-perf-pgo']:
+    return 'performance_test_suite_android_clank_trichrome_bundle'
+  if bot_name in ['android-pixel6-perf', 'android-pixel6-perf-pgo']:
+    return 'performance_test_suite_android_clank_trichrome_chrome_google_64_32_bundle'
+  if bot_name in ['android-pixel6-pro-perf', 'android-pixel6-pro-perf-pgo']:
+    return 'performance_test_suite_android_clank_trichrome_bundle'
+  if 'android' in bot_name.lower():
+    raise Exception(
+        'Given Android bot %s does not have an isolate mapped to it' % bot_name)
+
+  return 'performance_test_suite'
+
+
 def _GenerateQuests(arguments):
   """Generate a list of Quests from a dict of arguments.
 
@@ -422,8 +542,9 @@ def _GenerateQuests(arguments):
     request arguments that were used, and quests is a list of Quests.
   """
   quests = arguments.get('quests')
+
   if quests:
-    if isinstance(quests, basestring):
+    if isinstance(quests, six.string_types):
       quests = quests.split(',')
     quest_classes = []
     for quest in quests:
@@ -445,7 +566,8 @@ def _GenerateQuests(arguments):
         arguments['fallback_target'] = fallback_target
       quest_classes = (quest_module.FindIsolate, quest_module.RunTelemetryTest,
                        quest_module.ReadValue)
-    elif 'performance_test_suite_eve' in target:
+    elif ('performance_test_suite_eve' in target
+          or 'performance_test_suite_octopus' in target):
       quest_classes = (quest_module.FindIsolate,
                        quest_module.RunLacrosTelemetryTest,
                        quest_module.ReadValue)
@@ -494,7 +616,8 @@ def _ValidateTags(tags):
     raise ValueError(_ERROR_TAGS_DICT)
 
   for k, v in tags_dict.items():
-    if not isinstance(k, basestring) or not isinstance(v, basestring):
+    if not isinstance(k, six.string_types) or \
+        not isinstance(v, six.string_types):
       raise ValueError(_ERROR_TAGS_DICT)
 
   return tags_dict
@@ -504,7 +627,7 @@ def _ValidateUser(user):
   return user or utils.GetEmail()
 
 
-_REQUIRED_NON_EMPTY_PARAMS = {'target', 'benchmark'}
+_REQUIRED_NON_EMPTY_PARAMS = {'benchmark'}
 
 
 def _ValidateRequiredParams(params):

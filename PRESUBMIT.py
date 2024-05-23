@@ -7,8 +7,11 @@
 See https://www.chromium.org/developers/how-tos/depottools/presubmit-scripts
 for more details about the presubmit API built into depot_tools.
 """
+
 import re
 import sys
+
+USE_PYTHON3 = True
 
 _EXCLUDED_PATHS = (
     r'(.*[\\/])?\.git[\\/].*',
@@ -28,13 +31,15 @@ _EXCLUDED_PATHS = (
     r'^dashboard[\\/]dashboard[\\/]api[\\/]examples[\\/].*.js',
     r'^dashboard[\\/]dashboard[\\/]templates[\\/].*',
     r'^dashboard[\\/]dashboard[\\/]sheriff_config[\\/].*_pb2.py$',
+    r'^dashboard[\\/]sandwich_verification[\\/]cabe/proto/v1[\\/].*_pb2.py$',
+    r'^dashboard[\\/]sandwich_verification[\\/]cabe/proto/v1[\\/].*_pb2_grpc.py$', # pylint: disable=line-too-long
     r'^experimental[\\/]heatmap[\\/].*',
     r'^experimental[\\/]trace_on_tap[\\/]third_party[\\/].*',
     r'^experimental[\\/]perf_sheriffing_emailer[\\/].*.js',
     r'^perf_insights[\\/]test_data[\\/].*',
     r'^perf_insights[\\/]third_party[\\/].*',
     r'^telemetry[\\/]third_party[\\/].*',
-    r'^third_party[\\/].*',
+    r'.*third_party[\\/].*',
     r'^tracing[\\/]\.allow-devtools-save$',
     r'^tracing[\\/]bower\.json$',
     r'^tracing[\\/]\.bowerrc$',
@@ -47,16 +52,17 @@ _EXCLUDED_PATHS = (
 
 
 _GITHUB_BUG_ID_RE = re.compile(r'#[1-9]\d*')
-_MONORAIL_BUG_ID_RE = re.compile(r'[1-9]\d*')
-_MONORAIL_PROJECT_NAMES = frozenset({'chromium', 'v8', 'angleproject', 'skia'})
+_NUMERAL_BUG_ID_RE = re.compile(r'[1-9]\d*')
+_MONORAIL_PROJECT_NAMES = frozenset(
+    {'chromium', 'v8', 'angleproject', 'skia', 'dawn'})
 
 def CheckChangeLogBug(input_api, output_api):
   # Show a presubmit message if there is no Bug line or an empty Bug line.
   if not input_api.change.BugsFromDescription():
     return [output_api.PresubmitNotifyResult(
-        'If this change has associated bugs on GitHub or Monorail, add a '
-        '"Bug: <bug>(, <bug>)*" line to the patch description where <bug> can '
-        'be one of the following: catapult:#NNNN, ' +
+        'If this change has associated bugs on GitHub, Issuetracker or '
+        'Monorail, add a "Bug: <bug>(, <bug>)*" line to the patch description '
+        'where <bug> can be one of the following: catapult:#NNNN, b:NNNNNN, ' +
         ', '.join('%s:NNNNNN' % n for n in _MONORAIL_PROJECT_NAMES) + '.')]
 
   # Check that each bug in the BUG= line has the correct format.
@@ -79,8 +85,13 @@ def CheckChangeLogBug(input_api, output_api):
                               'repository should be provided in the '
                               '"catapult:#NNNN" format.' % bug)
       catapult_bug_provided = True
+    elif project_name == 'b':
+      if not _NUMERAL_BUG_ID_RE.match(bug_id):
+        error_messages.append('Invalid bug "%s". Bugs in the Issuetracker '
+                              'should be provided in the '
+                              '"b:NNNNNN" format.' % bug)
     elif project_name in _MONORAIL_PROJECT_NAMES:
-      if not _MONORAIL_BUG_ID_RE.match(bug_id):
+      if not _NUMERAL_BUG_ID_RE.match(bug_id):
         error_messages.append('Invalid bug "%s". Bugs in the Monorail %s '
                               'project should be provided in the '
                               '"%s:NNNNNN" format.' % (bug, project_name,
@@ -126,7 +137,7 @@ def CheckChangeOnUpload(input_api, output_api):
   results = CheckChange(input_api, output_api)
   cwd = input_api.PresubmitLocalPath()
   exit_code = input_api.subprocess.call(
-      [input_api.python_executable, 'generate_telemetry_build.py', '--check'],
+      [input_api.python3_executable, 'generate_telemetry_build.py', '--check'],
       cwd=cwd)
   if exit_code != 0:
     results.append(output_api.PresubmitError(

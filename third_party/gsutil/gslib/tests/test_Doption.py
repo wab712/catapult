@@ -109,6 +109,31 @@ class TestDOption(testcase.GsUtilIntegrationTestCase):
                              return_stderr=True)
     self.assertIn('\'cookie\': \'123\'', stderr2)
 
+  def test_minus_D_arbitrary_header_cp(self):
+    """Test upload and download with a sample perf trace token."""
+    file_name = 'bar'
+    fpath = self.CreateTempFile(file_name=file_name, contents=b'foo')
+    bucket_uri = self.CreateBucket()
+    stderr = self.RunGsUtil(
+        ['-D', '-h', 'custom-header:asdf', 'cp', fpath,
+         suri(bucket_uri)],
+        return_stderr=True)
+    self.assertRegex(stderr,
+                     r"Headers: \{[\s\S]*'custom-header': 'asdf'[\s\S]*\}")
+    stderr2 = self.RunGsUtil([
+        '-D', '-h', 'custom-header:asdf', 'cp',
+        suri(bucket_uri, file_name), fpath
+    ],
+                             return_stderr=True)
+    self.assertRegex(stderr2,
+                     r"Headers: \{[\s\S]*'custom-header': 'asdf'[\s\S]*\}")
+
+    # Ensure the header wasn't set in metadata somehow:
+    stdout = self.RunGsUtil(
+        ['ls', '-L', suri(bucket_uri, file_name)], return_stdout=True)
+    self.assertNotIn('custom', stdout)
+    self.assertNotIn('asdf', stdout)
+
   def test_minus_D_resumable_upload(self):
     fpath = self.CreateTempFile(contents=b'a1b2c3d4')
     bucket_uri = self.CreateBucket()
@@ -162,8 +187,10 @@ class TestDOption(testcase.GsUtilIntegrationTestCase):
                   (regex_str, stderr))
       request_fields_str = match.group(2)
       self.assertIn('Content-Length: 0', request_fields_str)
-      self.assertRegex(request_fields_str,
-                       'User-Agent: .*gsutil/%s' % gslib.VERSION)
+      self.assertRegex(
+          request_fields_str,
+          'User-Agent: .*gsutil/%s.*interactive/False command/cat' %
+          gslib.VERSION)
     elif self.test_api == ApiSelector.JSON:
       if six.PY2:
         self.assertIn("md5Hash: u'eB5eJF1ptWaXm4bijSPyxw=='", stderr)
@@ -173,9 +200,11 @@ class TestDOption(testcase.GsUtilIntegrationTestCase):
           'Cache-Control', 'no-cache, no-store, max-age=0, must-revalidate',
           stderr)
       self.assertRegex(
-          stderr, '.*GET.*b/%s/o/%s.*user-agent:.*gsutil/%s.Python/%s' %
-          (key_uri.bucket_name, key_uri.object_name, gslib.VERSION,
-           platform.python_version()))
+          stderr,
+          '.*GET.*b/%s/o/%s' % (key_uri.bucket_name, key_uri.object_name))
+      self.assertRegex(
+          stderr, 'Python/%s.gsutil/%s.*interactive/False command/cat' %
+          (platform.python_version(), gslib.VERSION))
 
     if gslib.IS_PACKAGE_INSTALL:
       self.assertIn('PACKAGED_GSUTIL_INSTALLS_DO_NOT_HAVE_CHECKSUMS', stdout)

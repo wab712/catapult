@@ -18,13 +18,14 @@ from google.appengine.ext import ndb
 
 from dashboard import email_sheriff
 from dashboard import find_change_points
+from dashboard.common import cloud_metric
 from dashboard.common import utils
 from dashboard.models import alert_group
 from dashboard.models import anomaly
-from dashboard.models import anomaly_config
 from dashboard.models import graph_data
 from dashboard.models import histogram
 from dashboard.models import subscription
+from dashboard.services import perf_issue_service_client
 from dashboard.sheriff_config_client import SheriffConfigClient
 from tracing.value.diagnostics import reserved_infos
 
@@ -67,8 +68,7 @@ def _ProcessTest(test_key):
 
   test = yield test_key.get_async()
 
-  config = yield anomaly_config.GetAnomalyConfigDictAsync(test)
-  max_num_rows = config.get('max_window_size', DEFAULT_NUM_POINTS)
+  max_num_rows = DEFAULT_NUM_POINTS
   rows_by_stat = yield GetRowsToAnalyzeAsync(test, max_num_rows)
 
   ref_rows_by_stat = {}
@@ -139,23 +139,42 @@ def _ProcessTestStat(test, stat, rows, ref_rows):
 
   anomalies = yield [_MakeAnomalyEntity(*inputs) for inputs in anomaly_inputs]
 
+  anomalies = [a for a in anomalies if a is not None]
+
   # If no new anomalies were found, then we're done.
   if not anomalies:
     raise ndb.Return(None)
 
-  logging.info('Created %d anomalies', len(anomalies))
+  logging.info('Created %d anomalies: %s', len(anomalies), [
+      '(start=%s, end=%s, project=%s)' %
+      (a.start_revision, a.end_revision, a.master_name) for a in anomalies
+  ])
   logging.info(' Test: %s', test_key.id())
   logging.info(' Stat: %s', stat)
+  logging.info(' Inputs: %s', [input[0] for input in anomaly_inputs])
 
   for a in anomalies:
     a.subscriptions = [a.matching_subscription]
     a.subscription_names = [a.matching_subscription.name]
     a.internal_only = (
-        any([
-            s.visibility != subscription.VISIBILITY.PUBLIC
-            for s in subscriptions
-        ]) or test.internal_only)
-    a.groups = alert_group.AlertGroup.GetGroupsForAnomaly(a, subscriptions)
+        any(s.visibility != subscription.VISIBILITY.PUBLIC
+            for s in subscriptions) or test.internal_only)
+    alert_groups = alert_group.AlertGroup.GetGroupsForAnomaly(a, subscriptions)
+    try:
+      # parity results from perf_issue_service
+      groups_by_request = perf_issue_service_client.GetAlertGroupsForAnomaly(a)
+      group_keys = [ndb.Key('AlertGroup', g) for g in groups_by_request]
+      if sorted(group_keys) != sorted(alert_groups):
+        logging.warning('Imparity found for GetAlertGroupsForAnomaly. %s, %s',
+                        group_keys, alert_groups)
+        cloud_metric.PublishPerfIssueServiceGroupingImpariry(
+            'GetAlertGroupsForAnomaly')
+      a.groups = group_keys
+      logging.debug('[GroupingDebug] Anomaly %s is associated with groups %s.',
+                    a.key, a.groups)
+    except Exception as e:  # pylint: disable=broad-except
+      logging.warning('Parity logic failed in GetAlertGroupsForAnomaly. %s',
+                      str(e))
 
   yield ndb.put_multi_async(anomalies)
 
@@ -219,7 +238,7 @@ def GetRowsToAnalyzeAsync(test, max_num_rows):
     results[s] = _FetchRowsByStat(test.key, s, latest_alert_by_stat[s],
                                   max_num_rows)
 
-  for s in results.keys():
+  for s in results:
     results[s] = yield results[s]
 
   raise ndb.Return(results)
@@ -230,7 +249,8 @@ def _FetchRowsByStat(test_key, stat, last_alert_future, max_num_rows):
   # If stats are specified, we only want to alert on those, otherwise alert on
   # everything.
   if stat == 'avg':
-    query = graph_data.Row.query(projection=['revision', 'timestamp', 'value'])
+    query = graph_data.Row.query(
+        projection=['revision', 'timestamp', 'value', 'swarming_bot_id'])
   else:
     query = graph_data.Row.query()
 
@@ -243,7 +263,7 @@ def _FetchRowsByStat(test_key, stat, last_alert_future, max_num_rows):
     last_alert = yield last_alert_future
     if last_alert:
       query = query.filter(graph_data.Row.revision > last_alert.end_revision)
-  query = query.order(-graph_data.Row.revision)
+  query = query.order(-graph_data.Row.revision)  # pylint: disable=invalid-unary-operand-type
 
   # However, we want to analyze them in ascending order.
   rows = yield query.fetch_async(limit=max_num_rows)
@@ -317,7 +337,7 @@ def _GetImmediatelyPreviousRevisionNumber(later_revision, rows):
   for (revision, _, _) in reversed(rows):
     if revision < later_revision:
       return revision
-  assert False, 'No matching revision found in |rows|.'
+  raise AssertionError('No matching revision found in |rows|.')
 
 
 def _GetRefBuildKeyForTest(test):
@@ -362,6 +382,14 @@ def _GetDisplayRange(old_end, rows):
   return start_rev, end_rev
 
 
+def _GetBotIdForRevisionNumber(row_tuples, revision_number):
+  for _, row, _ in row_tuples:
+    if row.revision == revision_number:
+      if hasattr(row, 'swarming_bot_id') and row.swarming_bot_id:
+        return row.swarming_bot_id
+  return None
+
+
 @ndb.tasklet
 def _MakeAnomalyEntity(change_point, test, stat, rows, config, matching_sub):
   """Creates an Anomaly entity.
@@ -370,7 +398,7 @@ def _MakeAnomalyEntity(change_point, test, stat, rows, config, matching_sub):
     change_point: A find_change_points.ChangePoint object.
     test: The TestMetadata entity that the anomalies were found on.
     stat: The TestMetadata stat that the anomaly was found on.
-    rows: List of Row entities that the anomalies were found on.
+    rows: List of (revision, graph_data.Row, value) tuples that the anomalies were found on.
     config: A dict representing the anomaly detection configuration
         parameters used to produce this anomaly.
     matching_sub: A subscription to which this anomaly is associated.
@@ -387,10 +415,19 @@ def _MakeAnomalyEntity(change_point, test, stat, rows, config, matching_sub):
     display_start, display_end = _GetDisplayRange(change_point.x_value, rows)
   median_before = change_point.median_before
   median_after = change_point.median_after
+  bot_id_before = _GetBotIdForRevisionNumber(rows, change_point.extended_start)
+  bot_id_after = _GetBotIdForRevisionNumber(rows, change_point.extended_end)
 
   suite_key = test.key.id().split('/')[:3]
   suite_key = '/'.join(suite_key)
   suite_key = utils.TestKey(suite_key)
+
+  if bot_id_after is not None and bot_id_before is not None and bot_id_after != bot_id_before:
+    logging.info(
+        'ignoring anomaly for %s, range %s-%s, reason: swarming bot id changed (%s vs %s)',
+        utils.TestPath(suite_key), change_point.extended_start,
+        change_point.extended_end, bot_id_before, bot_id_after)
+    raise ndb.Return(None)
 
   queried_diagnostics = yield (
       histogram.SparseDiagnostic.GetMostRecentDataByNamesAsync(

@@ -8,6 +8,7 @@ from __future__ import absolute_import
 
 import collections
 import json
+import six
 
 try:
   from itertools import zip_longest
@@ -39,6 +40,9 @@ class Change(
       args: A list of strings associated with a Change.
       variant: 0=base, 1..N=expN. Only valid for A/B jobs.
     """
+    # Handle empty-string patch
+    if not patch:
+      patch = None
     if not (commits or patch):
       raise TypeError('At least one commit or patch required.')
     return super(Change, cls).__new__(cls, tuple(commits), patch, label,
@@ -164,10 +168,9 @@ class Change(
 
   @classmethod
   def FromData(cls, data):
-    if isinstance(data, basestring):
+    if isinstance(data, six.string_types):
       return cls.FromUrl(data)
-    else:
-      return cls.FromDict(data)
+    return cls.FromDict(data)
 
   @classmethod
   def FromUrl(cls, url):
@@ -328,16 +331,16 @@ def _FindMidpoints(commits_a, commits_b):
       # Add any DEPS changes to the commit lists.
       deps_a = commit_a.Deps()
       deps_b = commit_b.Deps()
-      dep_commits_a = sorted(
+      dep_commits_a = (
           commit_module.Commit.FromDep(dep)
           for dep in deps_a.difference(deps_b)
           if not _FindRepositoryUrlInCommits(commits_a, dep.repository_url))
-      dep_commits_b = sorted(
+      dep_commits_b = (
           commit_module.Commit.FromDep(dep)
           for dep in deps_b.difference(deps_a)
           if not _FindRepositoryUrlInCommits(commits_b, dep.repository_url))
-      commits_a += [c for c in dep_commits_a if c is not None]
-      commits_b += [c for c in dep_commits_b if c is not None]
+      commits_a += sorted(c for c in dep_commits_a if c is not None)
+      commits_b += sorted(c for c in dep_commits_b if c is not None)
 
   return commits_midpoint
 

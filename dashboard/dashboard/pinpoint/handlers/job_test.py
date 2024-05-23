@@ -15,6 +15,10 @@ from dashboard.pinpoint.models import job as job_module
 from dashboard.pinpoint.models import results2 as results2_module
 
 
+@mock.patch('dashboard.services.swarming.GetAliveBotsByDimensions',
+            mock.MagicMock(return_value=["a"]))
+@mock.patch('dashboard.common.cloud_metric._PublishTSCloudMetric',
+            mock.MagicMock())
 class JobTest(test.TestCase):
 
   @mock.patch.object(results2_module, 'GetCachedResults2', return_value="")

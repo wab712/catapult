@@ -14,11 +14,12 @@ from google.appengine.ext import ndb
 
 from dashboard.common import datastore_hooks
 from dashboard.common import descriptor
-from dashboard.common import request_handler
 from dashboard.common import stored_object
 from dashboard.common import namespaced_stored_object
 from dashboard.common import utils
 from dashboard.models import graph_data
+
+from flask import request, make_response
 
 # TestMetadata suite cache key.
 _LIST_SUITES_CACHE_KEY = 'list_tests_get_test_suites'
@@ -49,24 +50,17 @@ def FetchCachedTestSuites():
   return cached
 
 
-class UpdateTestSuitesHandler(request_handler.RequestHandler):
-  """A simple request handler to refresh the cached test suites info."""
-
-  def get(self):
-    """Refreshes the cached test suites list."""
-    self.post()
-
-  def post(self):
-    """Refreshes the cached test suites list."""
-    if self.request.get('internal_only') == 'true':
-      logging.info('Going to update internal-only test suites data.')
-      # Update internal-only test suites data.
-      datastore_hooks.SetPrivilegedRequest()
-      UpdateTestSuites(datastore_hooks.INTERNAL)
-    else:
-      logging.info('Going to update externally-visible test suites data.')
-      # Update externally-visible test suites data.
-      UpdateTestSuites(datastore_hooks.EXTERNAL)
+def UpdateTestSuitesPost():
+  if request.values.get('internal_only') == 'true':
+    logging.info('Going to update internal-only test suites data.')
+    # Update internal-only test suites data.
+    datastore_hooks.SetPrivilegedRequest()
+    UpdateTestSuites(datastore_hooks.INTERNAL)
+  else:
+    logging.info('Going to update externally-visible test suites data.')
+    # Update externally-visible test suites data.
+    UpdateTestSuites(datastore_hooks.EXTERNAL)
+  return make_response('')
 
 
 def UpdateTestSuites(permissions_namespace):
@@ -89,9 +83,15 @@ def _ListTestSuitesAsync(test_suites, partial_tests, parent_test=None):
   # Descriptor. When a TestMetadata key doesn't contain enough test path
   # components to compose a full test suite, add its key to partial_tests so
   # that the caller can run another query with parent_test.
+  logging.debug("list test suites async parent test: %s\npartial tests: %s",
+                parent_test, partial_tests)
   query = graph_data.TestMetadata.query()
   query = query.filter(graph_data.TestMetadata.parent_test == parent_test)
   query = query.filter(graph_data.TestMetadata.deprecated == False)
+  # hack to use composite index and capture all descriptions in DataStore
+  # description is unfortunately defined as part of the composite index:
+  # https://chromium.googlesource.com/catapult.git/+/HEAD/dashboard/index.yaml#317
+  query = query.filter(graph_data.TestMetadata.description != "made_up_description")
   keys = yield query.fetch_async(keys_only=True)
   for key in keys:
     test_path = utils.TestPath(key)
@@ -102,6 +102,7 @@ def _ListTestSuitesAsync(test_suites, partial_tests, parent_test=None):
       partial_tests.add(key)
     else:
       logging.error('Unable to parse "%s"', test_path)
+  logging.debug("list test suites: %s", test_suites)
 
 
 @ndb.synctasklet
@@ -176,7 +177,6 @@ def _FetchSuites():
         yield s
   except datastore_errors.Timeout:
     logging.error('Timeout fetching test suites.')
-  return
 
 
 def _GetTestSubPath(key):

@@ -21,7 +21,7 @@ class Tab(web_contents.WebContents):
       tab.Evaluate('1+1')
   """
   def __init__(self, inspector_backend, tab_list_backend, browser):
-    super(Tab, self).__init__(inspector_backend)
+    super().__init__(inspector_backend)
     self._tab_list_backend = tab_list_backend
     self._browser = browser
     self._action_runner = action_runner.ActionRunner(self)
@@ -63,8 +63,8 @@ class Tab(web_contents.WebContents):
     dom_counters = self._inspector_backend.GetDOMStats(
         timeout=DEFAULT_TAB_TIMEOUT)
     assert (len(dom_counters) == 3 and
-            all([x in dom_counters for x in ['document_count', 'node_count',
-                                             'event_listener_count']]))
+            all(x in dom_counters for x in ['document_count', 'node_count',
+                                             'event_listener_count']))
     return dom_counters
 
   def PrepareForLeakDetection(self):
@@ -133,16 +133,6 @@ class Tab(web_contents.WebContents):
       exceptions.DevtoolsTargetCrashException
     """
     return self._inspector_backend.FullScreenshot(timeout)
-
-  def GetCookieByName(self, name, timeout=DEFAULT_TAB_TIMEOUT):
-    """Returns the value of the cookie by the given |name|.
-
-    Raises:
-      exceptions.WebSocketDisconnected
-      exceptions.TimeoutException
-      exceptions.DevtoolsTargetCrashException
-    """
-    return self._inspector_backend.GetCookieByName(name, timeout)
 
   def CollectGarbage(self):
     """Forces a garbage collection.

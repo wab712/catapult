@@ -38,6 +38,7 @@ from boto.provider import Provider
 from boto.pyami.config import BotoConfigLocations
 
 import gslib
+from gslib import context_config
 from gslib.exception import CommandException
 from gslib.utils import system_util
 from gslib.utils.constants import DEFAULT_GCS_JSON_API_VERSION
@@ -294,6 +295,14 @@ def GetNewHttp(http_class=httplib2.Http, **kwargs):
   http = http_class(proxy_info=proxy_info, **kwargs)
   http.disable_ssl_certificate_validation = (not config.getbool(
       'Boto', 'https_validate_certificates'))
+
+  global_context_config = context_config.get_context_config()
+  if global_context_config and global_context_config.use_client_certificate:
+    http.add_certificate(key=global_context_config.client_cert_path,
+                         cert=global_context_config.client_cert_path,
+                         domain='',
+                         password=global_context_config.client_cert_password)
+
   return http
 
 
@@ -323,13 +332,18 @@ def HasConfiguredCredentials():
                     config.has_option('Credentials', 'aws_secret_access_key'))
   has_oauth_creds = (config.has_option('Credentials',
                                        'gs_oauth2_refresh_token'))
+  has_external_creds = (config.has_option('Credentials',
+                                          'gs_external_account_file'))
+  has_external_account_authorized_user_creds = (config.has_option(
+      'Credentials', 'gs_external_account_authorized_user_file'))
   has_service_account_creds = (
       HAS_CRYPTO and
       config.has_option('Credentials', 'gs_service_client_id') and
       config.has_option('Credentials', 'gs_service_key_file'))
 
   if (has_goog_creds or has_amzn_creds or has_oauth_creds or
-      has_service_account_creds):
+      has_service_account_creds or has_external_creds or
+      has_external_account_authorized_user_creds):
     return True
 
   valid_auth_handler = None
@@ -625,5 +639,14 @@ def _PatchedShouldRetryMethod(self, response, chunked_transfer=False):
           "Saw %s, retrying" % err.error_code,
           response=response
       )
+
+  return False
+
+def HasUserSpecifiedGsHost():
+  gs_host = boto.config.get('Credentials', 'gs_host', None)
+  default_host = six.ensure_str(boto.gs.connection.GSConnection.DefaultHost)
+
+  if gs_host is not None:
+    return default_host == six.ensure_str(gs_host)
 
   return False

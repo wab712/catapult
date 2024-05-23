@@ -53,7 +53,7 @@ class PossibleDesktopBrowser(possible_browser.PossibleBrowser):
     """
     del finder_options
     target_os = sys.platform.lower()
-    super(PossibleDesktopBrowser, self).__init__(
+    super().__init__(
         browser_type, target_os, not is_content_shell)
     assert browser_type in FindAllBrowserTypes(), (
         'Please add %s to desktop_browser_finder.FindAllBrowserTypes' %
@@ -111,7 +111,7 @@ class PossibleDesktopBrowser(possible_browser.PossibleBrowser):
     return [self.profile_directory, self.browser_directory]
 
   def SetUpEnvironment(self, browser_options):
-    super(PossibleDesktopBrowser, self).SetUpEnvironment(browser_options)
+    super().SetUpEnvironment(browser_options)
     if self._browser_options.dont_override_profile:
       return
 
@@ -120,9 +120,13 @@ class PossibleDesktopBrowser(possible_browser.PossibleBrowser):
     if source_profile and self._is_content_shell:
       raise RuntimeError('Profiles cannot be used with content shell')
 
-    self._profile_directory = tempfile.mkdtemp()
+    if not self._browser_options.profile_type == 'exact':
+      self._profile_directory = tempfile.mkdtemp()
+    else:
+      self._profile_directory = source_profile
+
     self._download_directory = tempfile.mkdtemp()
-    if source_profile:
+    if not self._browser_options.profile_type == 'exact' and source_profile:
       logging.info('Seeding profile directory from: %s', source_profile)
       # copytree requires the directory to not exist, so just delete the empty
       # directory and re-create it.
@@ -146,8 +150,9 @@ class PossibleDesktopBrowser(possible_browser.PossibleBrowser):
 
   def _TearDownEnvironment(self):
     if self._profile_directory and os.path.exists(self._profile_directory):
-      # Remove the profile directory, which was hosted on a temp dir.
-      shutil.rmtree(self._profile_directory, ignore_errors=True)
+      if not self._browser_options.profile_type == 'exact':
+        # Remove the profile directory, which was hosted on a temp dir.
+        shutil.rmtree(self._profile_directory, ignore_errors=True)
       self._profile_directory = None
     if self._download_directory and os.path.exists(self._download_directory):
       # Remove the download directory, which was hosted on a temp dir.
@@ -191,8 +196,8 @@ class PossibleDesktopBrowser(possible_browser.PossibleBrowser):
       except Exception: # pylint: disable=broad-except
         retry = x < _BROWSER_STARTUP_TRIES - 1
         retry_message = 'retrying' if retry else 'giving up'
-        logging.warn('Browser creation failed (attempt %d of %d), %s.',
-                     (x + 1), _BROWSER_STARTUP_TRIES, retry_message)
+        logging.warning('Browser creation failed (attempt %d of %d), %s.',
+                        (x + 1), _BROWSER_STARTUP_TRIES, retry_message)
         if retry:
           # Reset the environment to prevent leftovers in the profile
           # directory from influencing the next try.
@@ -206,6 +211,9 @@ class PossibleDesktopBrowser(possible_browser.PossibleBrowser):
                           ' disabled. Please try again with'
                           ' --allow-software-compositing flag.')
           raise
+    # Should never be hit, but Pylint can't see that we will retry until we
+    # eventually re-raise the above exception.
+    raise RuntimeError()
 
   def GetBrowserStartupArgs(self, browser_options):
     startup_args = chrome_startup_args.GetFromBrowserOptions(browser_options)
@@ -270,7 +278,7 @@ class PossibleDesktopBrowser(possible_browser.PossibleBrowser):
     debug_x64 is being used for tests, and the release tag if a release
     browser like release_x64 is being used.
     '''
-    tags = super(PossibleDesktopBrowser, self).GetTypExpectationsTags()
+    tags = super().GetTypExpectationsTags()
     if 'debug' in self.browser_type.lower().split('_'):
       tags.append('debug')
     if 'release' in self.browser_type.lower().split('_'):
@@ -335,6 +343,8 @@ def FindAllAvailableBrowsers(finder_options, device):
   if sys.platform == 'darwin':
     chromium_app_names.append('Chromium.app/Contents/MacOS/Chromium')
     chromium_app_names.append('Google Chrome.app/Contents/MacOS/Google Chrome')
+    chromium_app_names.append('Google Chrome for Testing.app/' +
+                              'Contents/MacOS/Google Chrome for Testing')
     content_shell_app_name = 'Content Shell.app/Contents/MacOS/Content Shell'
   elif sys.platform.startswith('linux'):
     chromium_app_names.append('chrome')
@@ -378,7 +388,7 @@ def FindAllAvailableBrowsers(finder_options, device):
   # Add local builds
   for build_path in path_module.GetBuildDirectories(finder_options.chrome_root):
     # TODO(agrieve): Extract browser_type from args.gn's is_debug.
-    browser_type = os.path.basename(build_path).lower()
+    browser_type = os.path.basename(build_path.rstrip(os.sep)).lower()
     for chromium_app_name in chromium_app_names:
       AddIfFound(browser_type, build_path, chromium_app_name, False)
     AddIfFound('content-shell-' + browser_type, build_path,
@@ -460,7 +470,7 @@ def FindAllAvailableBrowsers(finder_options, device):
     if "--ozone-platform" in arg:
       has_ozone_platform = True
 
-  if len(browsers) and not has_x11_display and not has_ozone_platform:
+  if browsers and not has_x11_display and not has_ozone_platform:
     logging.warning(
         'Found (%s), but you do not have a DISPLAY environment set.', ','.join(
             [b.browser_type for b in browsers]))

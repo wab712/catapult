@@ -7,11 +7,11 @@ from __future__ import division
 from __future__ import absolute_import
 
 import copy
+from flask import Flask
 import json
 import mock
 import sys
 import uuid
-import webapp2
 import webtest
 
 from google.appengine.ext import ndb
@@ -75,16 +75,21 @@ TEST_OWNERS = {
     'type': 'GenericSet'
 }
 
+flask_app = Flask(__name__)
 
+
+@flask_app.route('/add_histograms_queue', methods=['GET', 'POST'])
+def AddHistogramsQueuePost():
+  return add_histograms_queue.AddHistogramsQueuePost()
+
+
+@mock.patch('dashboard.common.cloud_metric._PublishTSCloudMetric',
+            mock.MagicMock())
 class AddHistogramsQueueTest(testing_common.TestCase):
 
   def setUp(self):
-    super(AddHistogramsQueueTest, self).setUp()
-    app = webapp2.WSGIApplication([
-        ('/add_histograms_queue',
-         add_histograms_queue.AddHistogramsQueueHandler)
-    ])
-    self.testapp = webtest.TestApp(app)
+    super().setUp()
+    self.testapp = webtest.TestApp(flask_app)
     self.SetCurrentUser('foo@bar.com', is_admin=True)
 
   def testPostHistogram(self):
@@ -153,6 +158,57 @@ class AddHistogramsQueueTest(testing_common.TestCase):
 
     rows = graph_data.Row.query().fetch()
     self.assertEqual(7, len(rows))
+    self.assertEqual(None, rows[0].swarming_bot_id)
+
+  def testPostHistogram_Internal_swarmingBotId(self):
+    test_path = 'Chromium/win7/suite/metric'
+    h2 = copy.deepcopy(TEST_HISTOGRAM)
+    h2['diagnostics'][reserved_infos.BOT_ID.name] = {
+        'type': 'GenericSet',
+        'values': ['swarming-bot-id-0'],
+    }
+
+    params = [{
+        'data': h2,
+        'test_path': test_path,
+        'benchmark_description': None,
+        'revision': 123
+    }]
+    self.testapp.post('/add_histograms_queue', json.dumps(params))
+
+    histograms = histogram.Histogram.query().fetch()
+    self.assertEqual(1, len(histograms))
+
+    rows = graph_data.Row.query().fetch()
+    self.assertEqual(7, len(rows))
+    self.assertEqual('swarming-bot-id-0', rows[0].swarming_bot_id)
+
+  def testPostHistogram_Internal_invalidSwarmingBotId(self):
+    test_path = 'Chromium/win7/suite/metric'
+    h2 = copy.deepcopy(TEST_HISTOGRAM)
+    h2['diagnostics'][reserved_infos.BOT_ID.name] = {
+        'type':
+            'GenericSet',
+        'values': [
+            'swarming-bot-id-0', 'swarming-bot-id-1', 'swarming-bot-id-2',
+            'swarming-bot-id-3'
+        ],
+    }
+
+    params = [{
+        'data': h2,
+        'test_path': test_path,
+        'benchmark_description': None,
+        'revision': 123
+    }]
+    self.testapp.post('/add_histograms_queue', json.dumps(params))
+
+    histograms = histogram.Histogram.query().fetch()
+    self.assertEqual(1, len(histograms))
+
+    rows = graph_data.Row.query().fetch()
+    self.assertEqual(7, len(rows))
+    self.assertEqual(None, rows[0].swarming_bot_id)
 
   def testPostHistogram_WithFreshDiagnostics(self):
     graph_data.Bot(
@@ -397,15 +453,15 @@ class AddHistogramsQueueTest(testing_common.TestCase):
 
   def testGetUnitArgs_Up(self):
     unit_args = add_histograms_queue.GetUnitArgs('count_biggerIsBetter')
-    self.assertEquals(anomaly.UP, unit_args['improvement_direction'])
+    self.assertEqual(anomaly.UP, unit_args['improvement_direction'])
 
   def testGetUnitArgs_Down(self):
     unit_args = add_histograms_queue.GetUnitArgs('count_smallerIsBetter')
-    self.assertEquals(anomaly.DOWN, unit_args['improvement_direction'])
+    self.assertEqual(anomaly.DOWN, unit_args['improvement_direction'])
 
   def testGetUnitArgs_Unknown(self):
     unit_args = add_histograms_queue.GetUnitArgs('count')
-    self.assertEquals(anomaly.UNKNOWN, unit_args['improvement_direction'])
+    self.assertEqual(anomaly.UNKNOWN, unit_args['improvement_direction'])
 
   def testCreateRowEntities(self):
     test_path = 'Chromium/win7/suite/metric'
@@ -615,15 +671,13 @@ class AddHistogramsQueueTest(testing_common.TestCase):
                    mock.MagicMock(return_value=None))
 @mock.patch.object(SheriffConfigClient, 'Match',
                    mock.MagicMock(return_value=([], None)))
+@mock.patch('dashboard.common.cloud_metric._PublishTSCloudMetric',
+            mock.MagicMock())
 class AddHistogramsQueueTestWithUploadCompletionToken(testing_common.TestCase):
 
   def setUp(self):
-    super(AddHistogramsQueueTestWithUploadCompletionToken, self).setUp()
-    app = webapp2.WSGIApplication([
-        ('/add_histograms_queue',
-         add_histograms_queue.AddHistogramsQueueHandler)
-    ])
-    self.testapp = webtest.TestApp(app)
+    super().setUp()
+    self.testapp = webtest.TestApp(flask_app)
     testing_common.SetIsInternalUser('foo@bar.com', True)
     self.SetCurrentUser('foo@bar.com')
 

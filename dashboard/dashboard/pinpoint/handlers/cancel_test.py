@@ -16,21 +16,34 @@ from dashboard.pinpoint.models import scheduler
 
 
 @mock.patch('dashboard.common.utils.ServiceAccountHttp', mock.MagicMock())
+@mock.patch('dashboard.services.swarming.GetAliveBotsByDimensions',
+            mock.MagicMock(return_value=["a"]))
+@mock.patch('dashboard.common.cloud_metric.PublishPinpointJobStatusMetric',
+            mock.MagicMock())
+@mock.patch('dashboard.common.cloud_metric.PublishPinpointJobRunTimeMetric',
+            mock.MagicMock())
+@mock.patch('dashboard.common.cloud_metric._PublishTSCloudMetric',
+            mock.MagicMock())
 class CancelJobTest(test.TestCase):
 
   def setUp(self):
-    super(CancelJobTest, self).setUp()
+    super().setUp()
     self.SetCurrentUserOAuth(testing_common.INTERNAL_USER)
     self.SetCurrentClientIdOAuth(api_auth.OAUTH_CLIENT_ID_ALLOWLIST[0])
 
     self.add_bug_comment = mock.MagicMock()
     self.get_issue = mock.MagicMock()
-    patcher = mock.patch(
-        'dashboard.services.issue_tracker_service.IssueTrackerService')
-    issue_tracker_service = patcher.start()
-    issue_tracker_service.return_value = mock.MagicMock(
-        AddBugComment=self.add_bug_comment, GetIssue=self.get_issue)
-    self.addCleanup(patcher.stop)
+
+    perf_issue_patcher = mock.patch(
+        'dashboard.services.perf_issue_service_client.GetIssue', self.get_issue)
+    perf_issue_patcher.start()
+    self.addCleanup(perf_issue_patcher.stop)
+
+    perf_comment_post_patcher = mock.patch(
+        'dashboard.services.perf_issue_service_client.PostIssueComment',
+        self.add_bug_comment)
+    perf_comment_post_patcher.start()
+    self.addCleanup(perf_comment_post_patcher.stop)
 
   @mock.patch.object(cancel.utils, 'GetEmail',
                      mock.MagicMock(return_value='lovely.user@example.com'))

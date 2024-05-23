@@ -13,6 +13,7 @@ import re
 import subprocess
 import sys
 import six
+from PIL import ImageGrab  # pylint: disable=import-error
 
 from telemetry.core import exceptions
 from telemetry.core import os_version as os_version_module
@@ -27,12 +28,7 @@ try:
   import win32con  # pylint: disable=import-error
   import win32gui  # pylint: disable=import-error
   import win32process  # pylint: disable=import-error
-  import win32ui  # pylint: disable=import-error
   import winerror  # pylint: disable=import-error
-  try:
-    import winreg  # pylint: disable=import-error
-  except ImportError:
-    import six.moves.winreg as winreg  # pylint: disable=import-error,wrong-import-order
   import win32security  # pylint: disable=import-error
 except ImportError as e:
   if platform.system() == 'Windows':
@@ -47,20 +43,12 @@ except ImportError as e:
   win32pipe = None
   win32process = None
   win32security = None
-  win32ui = None
   winerror = None
-  winreg = None
-
-
-try:
-  from PIL import Image  # pylint: disable=import-error
-except ImportError:
-  Image = None
 
 
 class WinPlatformBackend(desktop_platform_backend.DesktopPlatformBackend):
   def __init__(self):
-    super(WinPlatformBackend, self).__init__()
+    super().__init__()
 
   @classmethod
   def IsPlatformBackendForHost(cls):
@@ -111,19 +99,28 @@ class WinPlatformBackend(desktop_platform_backend.DesktopPlatformBackend):
       process_info.append(pi)
     return process_info
 
+  @decorators.Cache
   def GetPcSystemType(self):
-    # use: wmic computersystem get pcsystemtype
-    # the return value of the communicate() looks like:
-    #  ('PCSystemType  \r\r\nX             \r\r\n\r\r\n', None)
-    # where X represents the system type.
-    # More on: https://docs.microsoft.com/en-us/windows/win32/cimwin32prov/win32-computersystem
+    # WMIC was introduced in Windows 2000, deprecated in Windows 10 21H1 (build
+    # 19043), and removed in Windows 10 22H1. Get-CimInstance is the recommended
+    # replacement, introduced in PowerShell 3.0, together with Windows 8. So to
+    # work with OSes starting from Windows 7, we need to keep them both.
+    # Details about computer system can be found at
+    # https://docs.microsoft.com/en-us/windows/win32/cimwin32prov/win32-computersystem
+
+    use_powershell = int(platform.version().split('.')[-1]) >= 19043
+
+    if use_powershell:
+      args = ['powershell', 'Get-CimInstance -ClassName Win32_ComputerSystem' \
+              ' | Select-Object -Property PCSystemType']
+    else:
+      args = ['wmic', 'computersystem', 'get', 'pcsystemtype']
     lines = six.ensure_str(
-        subprocess.Popen(
-            ['wmic', 'computersystem', 'get', 'pcsystemtype'],
-            stdout=subprocess.PIPE
-            ).communicate()[0]
-        ).split()
+        subprocess.Popen(args, stdout=subprocess.PIPE).communicate()[0]).split()
+
     if len(lines) > 1 and lines[0] == 'PCSystemType':
+      if use_powershell:
+        return lines[2]
       return lines[1]
     return '0'
 
@@ -132,7 +129,7 @@ class WinPlatformBackend(desktop_platform_backend.DesktopPlatformBackend):
     return self.GetPcSystemType() == '2'
 
   def GetTypExpectationsTags(self):
-    tags = super(WinPlatformBackend, self).GetTypExpectationsTags()
+    tags = super().GetTypExpectationsTags()
     if self.IsLaptop():
       tags.append('win-laptop')
     return tags
@@ -146,6 +143,8 @@ class WinPlatformBackend(desktop_platform_backend.DesktopPlatformBackend):
 
   @decorators.Cache
   def GetOSVersionName(self):
+    _MIN_WIN11_BUILD = 22000
+
     os_version = platform.uname()[3]
 
     if os_version.startswith('5.1.'):
@@ -154,26 +153,16 @@ class WinPlatformBackend(desktop_platform_backend.DesktopPlatformBackend):
       return os_version_module.VISTA
     if os_version.startswith('6.1.'):
       return os_version_module.WIN7
-    # The version of python.exe we commonly use (2.7) is only manifested as
-    # being compatible with Windows versions up to 8. Therefore Windows *lies*
-    # to python about the version number to keep it runnable on Windows 10.
-    key_name = r'Software\Microsoft\Windows NT\CurrentVersion'
-    key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, key_name)
-    try:
-      value, _ = winreg.QueryValueEx(key, 'CurrentMajorVersionNumber')
-    except OSError:
-      value = None
-    finally:
-      key.Close()
-    if value == 10:
-      return os_version_module.WIN10
-    elif os_version.startswith('6.2.'):
+    if os_version.startswith('6.2.'):
       return os_version_module.WIN8
-    elif os_version.startswith('6.3.'):
+    if os_version.startswith('6.3.'):
       return os_version_module.WIN81
-    raise NotImplementedError(
-        'Unknown win version: %s, CurrentMajorVersionNumber: %s' %
-        (os_version, value))
+    if os_version.startswith('10.0.'):
+      build = os_version.split('.')[2]
+      if int(build) >= _MIN_WIN11_BUILD:
+        return os_version_module.WIN11
+      return os_version_module.WIN10
+    raise NotImplementedError('Unknown win version: %s' % os_version)
 
   @decorators.Cache
   def GetOSVersionDetailString(self):
@@ -183,37 +172,25 @@ class WinPlatformBackend(desktop_platform_backend.DesktopPlatformBackend):
     return True
 
   def TakeScreenshot(self, file_path):
-    width = win32api.GetSystemMetrics(win32con.SM_CXSCREEN)
-    height = win32api.GetSystemMetrics(win32con.SM_CYSCREEN)
-    screen_win = win32gui.GetDesktopWindow()
-    win_dc = None
-    screen_dc = None
-    capture_dc = None
-    capture_bitmap = None
-    try:
-      win_dc = win32gui.GetWindowDC(screen_win)
-      screen_dc = win32ui.CreateDCFromHandle(win_dc)
-      capture_dc = screen_dc.CreateCompatibleDC()
-      capture_bitmap = win32ui.CreateBitmap()
-      capture_bitmap.CreateCompatibleBitmap(screen_dc, width, height)
-      capture_dc.SelectObject(capture_bitmap)
-      capture_dc.BitBlt(
-          (0, 0), (width, height), screen_dc, (0, 0), win32con.SRCCOPY)
-      pixels = capture_bitmap.GetBitmapBits(True)
-      image = Image.frombuffer(
-          'RGB', (width, height), pixels, 'raw', 'BGRX', 0, 1)
-      image.save(file_path, 'PNG')
-      image.close()
-    finally:
-      if capture_bitmap:
-        win32gui.DeleteObject(capture_bitmap.GetHandle())
-      if capture_dc:
-        capture_dc.DeleteDC()
-      if screen_dc:
-        screen_dc.DeleteDC()
-      if win_dc:
-        win32gui.ReleaseDC(screen_win, win_dc)
+    image = ImageGrab.grab(all_screens=True, include_layered_windows=True)
+    with open(file_path, 'wb') as f:
+      image.save(f, 'PNG')
     return True
+
+  def GetScreenResolution(self):
+    # SM_CXSCREEN - width of the screen of the primary display monitor
+    # SM_CYSCREEN - height of the screen of the primary display monitor
+    # resolution returned by GetSystemMetrics is scaled
+    width = ctypes.windll.user32.GetSystemMetrics(win32con.SM_CXSCREEN)
+    height = ctypes.windll.user32.GetSystemMetrics(win32con.SM_CYSCREEN)
+
+    if self.GetOSVersionName() < os_version_module.WIN81:
+      # shcore.dll first introduced in Windows 8.1
+      return width, height
+
+    # 0 - DEVICE_PRIMARY (primary display monitor)
+    scale = ctypes.windll.shcore.GetScaleFactorForDevice(0)
+    return width * scale // 100, height * scale // 100
 
   def CanFlushIndividualFilesFromSystemCache(self):
     return True
@@ -226,8 +203,7 @@ class WinPlatformBackend(desktop_platform_backend.DesktopPlatformBackend):
       handle = win32api.OpenProcess(mask, False, pid)
       return func(handle)
     except pywintypes.error as e:
-      errcode = e[0]
-      if errcode == 87:
+      if e.winerror == winerror.ERROR_INVALID_PARAMETER:
         raise exceptions.ProcessGoneException()
       raise
     finally:
@@ -257,7 +233,7 @@ class WinPlatformBackend(desktop_platform_backend.DesktopPlatformBackend):
       def __init__(self):
         self.size = ctypes.sizeof(self)
         # pylint: disable=bad-super-call
-        super(PerformanceInfo, self).__init__()
+        super().__init__()
 
     performance_info = PerformanceInfo()
     ctypes.windll.psapi.GetPerformanceInfo(
@@ -293,11 +269,13 @@ class WinPlatformBackend(desktop_platform_backend.DesktopPlatformBackend):
       if proc_info['hInstApp'] <= 32:
         raise Exception('Unable to launch %s' % application)
       return proc_info['hProcess']
-    else:
-      handle, _, _, _ = win32process.CreateProcess(
-          None, application + ' ' + parameters, None, None, False,
-          win32process.CREATE_NO_WINDOW, None, None, win32process.STARTUPINFO())
-      return handle
+    handle, _, _, _ = win32process.CreateProcess(None,
+                                                 application + ' ' + parameters,
+                                                 None, None, False,
+                                                 win32process.CREATE_NO_WINDOW,
+                                                 None, None,
+                                                 win32process.STARTUPINFO())
+    return handle
 
   def IsCooperativeShutdownSupported(self):
     return True
@@ -329,10 +307,9 @@ class WinPlatformBackend(desktop_platform_backend.DesktopPlatformBackend):
             win32gui.GetClassName(hwnd).lower().startswith(app_name)):
           hwnds.append(hwnd)
       except pywintypes.error as e:
-        error_code = e[0]
         # Some windows may close after enumeration and before the calls above,
         # so ignore those.
-        if error_code != winerror.ERROR_INVALID_WINDOW_HANDLE:
+        if e.winerror != winerror.ERROR_INVALID_WINDOW_HANDLE:
           raise
       return True
     hwnds = []
@@ -341,8 +318,7 @@ class WinPlatformBackend(desktop_platform_backend.DesktopPlatformBackend):
       for hwnd in hwnds:
         win32gui.SendMessage(hwnd, win32con.WM_CLOSE, 0, 0)
       return True
-    else:
-      logging.info('Did not find any windows owned by target process')
+    logging.info('Did not find any windows owned by target process')
     return False
 
   def GetIntelPowerGadgetPath(self):

@@ -6,34 +6,36 @@ from __future__ import print_function
 from __future__ import division
 from __future__ import absolute_import
 
-import unittest
-
-import mock
-import webapp2
-import webtest
 from datetime import datetime
 from datetime import timedelta
+from flask import Flask
+import mock
+import unittest
+import webtest
 
 from dashboard import mark_recovered_alerts
 from dashboard.common import testing_common
 from dashboard.common import utils
 from dashboard.models import anomaly
 from dashboard.models import bug_data
-from dashboard.services import issue_tracker_service
+from dashboard.services import perf_issue_service_client
+
+flask_app = Flask(__name__)
+
+
+@flask_app.route('/mark_recovered_alerts', methods=['POST'])
+def MarkRecoveredAlertsPost():
+  return mark_recovered_alerts.MarkRecoveredAlertsPost()
 
 
 @mock.patch('apiclient.discovery.build', mock.MagicMock())
+@mock.patch('dashboard.services.request.RequestJson', mock.MagicMock())
 @mock.patch.object(utils, 'ServiceAccountHttp', mock.MagicMock())
-@mock.patch.object(utils, 'TickMonitoringCustomMetric', mock.MagicMock())
 class MarkRecoveredAlertsTest(testing_common.TestCase):
 
   def setUp(self):
-    super(MarkRecoveredAlertsTest, self).setUp()
-    app = webapp2.WSGIApplication([
-        ('/mark_recovered_alerts',
-         mark_recovered_alerts.MarkRecoveredAlertsHandler)
-    ])
-    self.testapp = webtest.TestApp(app)
+    super().setUp()
+    self.testapp = webtest.TestApp(flask_app)
 
   def _AddTestData(self, series, improvement_direction=anomaly.UP):
     """Adds one sample TestMetadata and associated data.
@@ -64,7 +66,7 @@ class MarkRecoveredAlertsTest(testing_common.TestCase):
                          project='chromium',
                          timestamp=datetime.now() - timedelta(days=1)):
     """Adds a sample Anomaly and returns the key."""
-    if bug_id > 0:
+    if bug_id and bug_id > 0:
       bug = bug_data.Key(project=project, bug_id=bug_id).get()
       if not bug:
         bug_data.Bug.New(project=project, bug_id=bug_id).put()
@@ -283,13 +285,11 @@ class MarkRecoveredAlertsTest(testing_common.TestCase):
                                mark_recovered_alerts._TASK_QUEUE_NAME)
     self.assertFalse(anomaly_key.get().recovered)
 
-  @mock.patch.object(issue_tracker_service.IssueTrackerService, 'AddBugComment')
+  @mock.patch.object(perf_issue_service_client, 'PostIssueComment')
   @mock.patch.object(
-      issue_tracker_service.IssueTrackerService,
-      'List',
-      return_value={'items': [{
+      perf_issue_service_client, 'GetIssues', return_value=[{
           'id': 1234
-      }]})
+      }])
   def testPost_AllAnomaliesRecovered_AddsComment(self, _, add_bug_comment_mock):
     values = [
         49,
@@ -331,18 +331,16 @@ class MarkRecoveredAlertsTest(testing_common.TestCase):
                                mark_recovered_alerts._TASK_QUEUE_NAME)
     self.assertTrue(anomaly_key.get().recovered)
     add_bug_comment_mock.assert_called_once_with(
-        mock.ANY,
-        mock.ANY,
-        project=mock.ANY,
+        issue_id=mock.ANY,
+        project_name=mock.ANY,
+        comment=mock.ANY,
         labels='Performance-Regression-Recovered')
 
-  @mock.patch.object(issue_tracker_service.IssueTrackerService, 'AddBugComment')
+  @mock.patch.object(perf_issue_service_client, 'PostIssueComment')
   @mock.patch.object(
-      issue_tracker_service.IssueTrackerService,
-      'List',
-      return_value={'items': [{
+      perf_issue_service_client, 'GetIssues', return_value=[{
           'id': 1234
-      }]})
+      }])
   def testPost_TestDeletedMarkRecovered_AddsComment(self, _,
                                                     add_bug_comment_mock):
     values = [
@@ -393,13 +391,11 @@ class MarkRecoveredAlertsTest(testing_common.TestCase):
     # all alerts recovered for the bug
     self.assertEqual(add_bug_comment_mock.call_count, 2)
 
-  @mock.patch.object(issue_tracker_service.IssueTrackerService, 'AddBugComment')
+  @mock.patch.object(perf_issue_service_client, 'PostIssueComment')
   @mock.patch.object(
-      issue_tracker_service.IssueTrackerService,
-      'List',
-      return_value={'items': [{
+      perf_issue_service_client, 'GetIssues', return_value=[{
           'id': 1234
-      }]})
+      }])
   def testPost_BugHasNoAlerts_NoCommentPosted(self, _, add_bug_comment_mock):
     self.testapp.post('/mark_recovered_alerts')
     self.ExecuteTaskQueueTasks('/mark_recovered_alerts',
@@ -439,12 +435,14 @@ class MarkRecoveredAlertsTest(testing_common.TestCase):
     # This test is based on a real-world case where there was a step up at
     # r362399, and shortly thereafter a step down at r362680 of roughly similar
     # magnitude. Alert key agxzfmNocm9tZXBlcmZyFAsSB0Fub21hbHkYgIDAnbimogoM
+    # Once the anomaly min_rel_change was updated to 10% due to crbug/1338325,
+    # value manipulation was required to trigger step up and down
     series = [(361776, 78260720), (361807, 78760907), (361837, 77723737),
               (361864, 77984606), (361869, 78660955), (361879, 78276998),
-              (361903, 77420262), (362399, 79629598), (362416, 79631028),
-              (362428, 79074016), (362445, 79348860), (362483, 79724728),
-              (362532, 79673772), (362623, 79120915), (362641, 79384809),
-              (362666, 79885480), (362680, 78308585), (362701, 78063846),
+              (361903, 77420262), (362399, 89629598), (362416, 89631028),
+              (362428, 89074016), (362445, 89348860), (362483, 89724728),
+              (362532, 89673772), (362623, 89120915), (362641, 89384809),
+              (362666, 89885480), (362680, 78308585), (362701, 78063846),
               (362730, 78244836), (362759, 77375408), (362799, 77836310),
               (362908, 78069878), (362936, 77191699), (362958, 77951200),
               (362975, 77906097)]
@@ -453,7 +451,7 @@ class MarkRecoveredAlertsTest(testing_common.TestCase):
         test_key,
         revision=362399,
         median_before=78275468.8,
-        median_after=79630313.6)
+        median_after=89630313.6)
     self.testapp.post('/mark_recovered_alerts')
     self.ExecuteTaskQueueTasks('/mark_recovered_alerts',
                                mark_recovered_alerts._TASK_QUEUE_NAME)

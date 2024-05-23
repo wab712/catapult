@@ -6,12 +6,16 @@ from __future__ import print_function
 from __future__ import division
 from __future__ import absolute_import
 
-import gae_ts_mon
+try:
+  import gae_ts_mon
+except ImportError:
+  # When running unit tests, we need to import from infra_libs.
+  from infra_libs import ts_mon as gae_ts_mon
 import logging
 import time
 
 
-class WallTimeLogger(object):
+class WallTimeLogger:
 
   def __init__(self, label, description=''):
     """Initialize a context manager labeled `label` that measures the wall time
@@ -46,7 +50,7 @@ class WallTimeLogger(object):
 class CpuTimeLogger(WallTimeLogger):
 
   def _Now(self):
-    return time.clock()
+    return time.process_time()
 
   def _Suffix(self):
     return 'cpu'

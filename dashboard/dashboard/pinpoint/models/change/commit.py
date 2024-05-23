@@ -9,10 +9,19 @@ from __future__ import absolute_import
 import collections
 import datetime
 import re
+import six
 
-from depot_tools import gclient_eval
+
+
+try:
+  from depot_tools.depot_tools import gclient_eval
+except ImportError:
+  # This is a work around to fix the discrepency on file tree in tests.
+  from depot_tools import gclient_eval
+
 from google.appengine.ext import deferred
 
+from dashboard import pinpoint_request
 from dashboard.pinpoint.models.change import commit_cache
 from dashboard.pinpoint.models.change import repository as repository_module
 from dashboard.services import gitiles_service
@@ -27,7 +36,9 @@ class NonLinearError(Exception):
 
 
 Dep = collections.namedtuple('Dep', ('repository_url', 'git_hash'))
-CommitPositionInfo = collections.namedtuple('CommitPositionInfo', ('branch', 'position'))
+CommitPositionInfo = collections.namedtuple('CommitPositionInfo',
+                                            ('branch', 'position'))
+
 
 def ParseDateWithUTCOffset(date_string):
   # Parsing the utc offset within strptime isn't supported until python 3, so
@@ -59,12 +70,20 @@ class Commit(collections.namedtuple('Commit', ('repository', 'git_hash'))):
   """A git repository pinned to a particular commit."""
 
   def __init__(self, *args, **kwargs):
-    super(Commit, self).__init__(*args, **kwargs)
+    super().__init__()
+    print(args, kwargs)  #  hard to bypass pylint here
     self._repository_url = None
+
+  def __new__(cls, *args, **kwargs):
+    self = super(Commit, cls).__new__(cls, *args, **kwargs)
+    return self
 
   def __str__(self):
     """Returns an informal short string representation of this Commit."""
     return self.repository + '@' + self.git_hash[:7]
+
+  def SetRepository_url(self, repository_url):
+    self._repository_url = repository_url
 
   @property
   def id_string(self):
@@ -76,7 +95,7 @@ class Commit(collections.namedtuple('Commit', ('repository', 'git_hash'))):
     """The HTTPS URL of the repository as passed to `git clone`."""
     cached_url = getattr(self, '_repository_url', None)
     if not cached_url:
-      self._repository_url = repository_module.RepositoryUrl(self.repository)
+      self.SetRepository_url(repository_module.RepositoryUrl(self.repository))
     return self._repository_url
 
   def Deps(self):
@@ -179,7 +198,7 @@ class Commit(collections.namedtuple('Commit', ('repository', 'git_hash'))):
     if repository in utils.GetRepositoryExclusions():
       return None
     commit = cls(repository, str(dep.git_hash).strip())
-    commit._repository_url = dep.repository_url
+    commit.SetRepository_url(dep.repository_url)
     return commit
 
   @classmethod
@@ -191,10 +210,9 @@ class Commit(collections.namedtuple('Commit', ('repository', 'git_hash'))):
                 or the git hash is not valid.
       ValueError: The URL has an unrecognized format.
     """
-    if isinstance(data, basestring):
+    if isinstance(data, six.string_types):
       return cls.FromUrl(data)
-    else:
-      return cls.FromDict(data)
+    return cls.FromDict(data)
 
   @classmethod
   def FromUrl(cls, url):
@@ -227,34 +245,52 @@ class Commit(collections.namedtuple('Commit', ('repository', 'git_hash'))):
                 or the git hash is not valid.
     """
     repository = data['repository']
+    if repository == 'angleproject':
+      repository = 'angle'
+
     git_hash = str(data['git_hash']).strip()
+    if not git_hash:
+      raise KeyError("No git hash given")
 
     # Translate repository if it's a URL.
     if repository.startswith('https://'):
       repository = repository_module.RepositoryName(repository)
+    cache_miss = True
+    key = repository + '@' + git_hash
 
     try:
-      # If they send in something like HEAD, resolve to a hash.
       repository_url = repository_module.RepositoryUrl(repository)
 
-      try:
+      if git_hash[0] == '-':
         # If it's already in the hash, then we've resolved this recently, and we
         # don't go resolving the data from the gitiles service.
-        result = commit_cache.Get(git_hash)
-      except KeyError:
+        # new key for query only
+        key = repository + '@' + git_hash[1:]
+        result = commit_cache.Get(key)
+        if result:
+          git_hash = result.get('url').split('/')[-1]
+          cache_miss = False
+        else:
+          git_hash = git_hash[1:]
+      if cache_miss:
+        try:
+          # Try with commit position
+          git_hash = pinpoint_request.ResolveToGitHash(git_hash)
+        except ValueError:
+          pass
         result = gitiles_service.CommitInfo(repository_url, git_hash)
         git_hash = result['commit']
     except gitiles_service.NotFoundError as e:
-      raise KeyError(str(e))
+      six.raise_from(KeyError(str(e)), e)
 
     commit = cls(repository, git_hash)
-    commit._repository_url = repository_url
+    commit.SetRepository_url(repository_url)
 
-    # IF this is something like HEAD, cache this for a short time so that we
-    # avoid hammering gitiles.
+    # IF this is a ref like HEAD, cache this for a short time so that we
+    # fetch the build which is likely already built.
     if not gitiles_service.IsHash(data['git_hash']):
-      commit.CacheCommitInfo(result, memcache_timeout=30 * 60)
-
+      if cache_miss:
+        commit.CacheCommitInfo(result, key=key, memcache_timeout=60 * 60 * 10)
     return commit
 
   @classmethod
@@ -289,7 +325,8 @@ class Commit(collections.namedtuple('Commit', ('repository', 'git_hash'))):
                                                self.git_hash)
       return self.CacheCommitInfo(commit_info)
 
-  def CacheCommitInfo(self, commit_info, memcache_timeout=None):
+  def CacheCommitInfo(self, commit_info, key=None, memcache_timeout=None):
+    cache_key = key or self.id_string
     url = self.repository_url + '/+/' + commit_info['commit']
     author = commit_info['author']['email']
 
@@ -299,7 +336,7 @@ class Commit(collections.namedtuple('Commit', ('repository', 'git_hash'))):
     message = commit_info['message']
 
     commit_cache.Put(
-        self.id_string,
+        cache_key,
         url,
         author,
         created,

@@ -3,7 +3,12 @@
 # found in the LICENSE file.
 
 from __future__ import absolute_import
-import collections
+try:
+  # Since python 3
+  import collections.abc as collections_abc
+except ImportError:
+  # Won't work after python 3.8
+  import collections as collections_abc
 
 from telemetry.internal.backends.chrome_inspector import inspector_backend_list
 from telemetry.internal.browser import extension_page
@@ -12,16 +17,14 @@ from telemetry.internal.browser import extension_page
 class ExtensionBackendList(inspector_backend_list.InspectorBackendList):
   """A dynamic sequence of extension_page.ExtensionPages."""
 
-  def __init__(self, browser_backend):
-    super(ExtensionBackendList, self).__init__(browser_backend)
-
   def ShouldIncludeContext(self, context):
     return context['url'].startswith('chrome-extension://')
 
-  def CreateWrapper(self, inspector_backend):
-    return extension_page.ExtensionPage(inspector_backend)
+  def CreateWrapper(self, inspector_backend_instance):
+    return extension_page.ExtensionPage(inspector_backend_instance)
 
-class ExtensionBackendDict(collections.Mapping):
+
+class ExtensionBackendDict(collections_abc.Mapping):
   """A dynamic mapping of extension_id to extension_page.ExtensionPages."""
 
   def __init__(self, browser_backend):

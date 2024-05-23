@@ -45,6 +45,7 @@ import httplib2
 import os
 import six
 from six import add_move, MovedModule
+
 add_move(MovedModule('mock', 'mock', 'unittest.mock'))
 from six.moves import mock
 
@@ -274,7 +275,8 @@ class TestUtil(testcase.GsUtilUnitTestCase):
                     443 if env_var.lower().startswith('https') else 80))
             # Shouldn't populate info for other variables
             for other_env_var in valid_variables:
-              if other_env_var == env_var: continue
+              if other_env_var == env_var:
+                continue
               self._AssertProxyInfosEqual(
                   boto_util.ProxyInfoFromEnvironmentVar(other_env_var),
                   httplib2.ProxyInfo(httplib2.socks.PROXY_TYPE_HTTP, None, 0))
@@ -307,7 +309,7 @@ class TestUtil(testcase.GsUtilUnitTestCase):
                 httplib2.ProxyInfo(httplib2.socks.PROXY_TYPE_HTTP,
                                    '1.2.3.4',
                                    50,
-                                   proxy_pass='bar'))
+                                   proxy_user='bar'))
       for env_var in ['proxy', 'noproxy', 'garbage']:
         for url_string in ['1.2.3.4:50', 'http://1.2.3.4:50']:
           with SetEnvironmentForTest({env_var: url_string}):

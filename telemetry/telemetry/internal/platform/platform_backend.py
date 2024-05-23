@@ -3,6 +3,9 @@
 # found in the LICENSE file.
 
 from __future__ import absolute_import
+
+import logging
+
 from telemetry.internal.forwarders import do_nothing_forwarder
 from telemetry.internal.platform import network_controller_backend
 from telemetry.internal.platform import tracing_controller_backend
@@ -11,7 +14,7 @@ from telemetry.testing import test_utils
 
 # pylint: disable=unused-argument
 
-class PlatformBackend(object):
+class PlatformBackend():
 
   def __init__(self, device=None):
     """ Initalize an instance of PlatformBackend from a device optionally.
@@ -161,6 +164,19 @@ class PlatformBackend(object):
 
   def FlushDnsCache(self):
     pass
+
+  def RestartTsProxyServerOnRemotePlatforms(self):
+    os_name = self.GetOSName()
+    if os_name in ('android', 'chromeos'):
+      if (not self.network_controller_backend or
+          self.network_controller_backend.is_intentionally_closed):
+        logging.warning('Not restarting TsProxyServer since it is not running')
+        return
+      logging.warning(
+          'Restarting TsProxyServer due to being on a remote platform')
+      wpr_mode = self.network_controller_backend.wpr_mode
+      self.network_controller_backend.Close()
+      self.network_controller_backend.Open(wpr_mode)
 
   def LaunchApplication(
       self, application, parameters=None, elevate_privilege=False):

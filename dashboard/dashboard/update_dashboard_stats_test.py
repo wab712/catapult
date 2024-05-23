@@ -7,10 +7,10 @@ from __future__ import division
 from __future__ import absolute_import
 
 import datetime
+from flask import Flask
 from six.moves import http_client
 import mock
 import unittest
-import webapp2
 import webtest
 
 from google.appengine.ext import ndb
@@ -32,6 +32,13 @@ _RESULTS_BY_CHANGE = {
     'chromium@bbbbbbb': [5, 5, 5, 5]
 }
 
+flask_app = Flask(__name__)
+
+
+@flask_app.route('/update_dashboard_stats')
+def UpdateDashboardStatsGet():
+  return update_dashboard_stats.UpdateDashboardStatsGet()
+
 
 class _QuestStub(quest.Quest):
 
@@ -49,7 +56,7 @@ class _QuestStub(quest.Quest):
 class ExecutionResults(execution_test._ExecutionStub):
 
   def __init__(self, c):
-    super(ExecutionResults, self).__init__()
+    super().__init__()
     self._result_for_test = _RESULTS_BY_CHANGE[str(c)]
 
   def _Poll(self):
@@ -71,12 +78,8 @@ def _FakeTasklet(*args):
 class UpdateDashboardStatsTest(test.TestCase):
 
   def setUp(self):
-    super(UpdateDashboardStatsTest, self).setUp()
-    app = webapp2.WSGIApplication([
-        ('/update_dashboard_stats',
-         update_dashboard_stats.UpdateDashboardStatsHandler)
-    ])
-    self.testapp = webtest.TestApp(app)
+    super().setUp()
+    self.testapp = webtest.TestApp(flask_app)
 
   def _CreateJob(self,
                  hash1,
@@ -92,16 +95,18 @@ class UpdateDashboardStatsTest(test.TestCase):
     old_commit = commit.Commit('chromium', hash2)
     change_b = change_module.Change((old_commit,))
 
-    job = job_module.Job.New((_QuestStub(),), (change_a, change_b),
-                             comparison_mode=comparison_mode,
-                             bug_id=bug_id,
-                             arguments=arguments)
-    job.created = created
-    job.exception = exception
-    job.state.ScheduleWork()
-    job.state.Explore()
-    job.put()
-    return job
+    with mock.patch('dashboard.services.swarming.GetAliveBotsByDimensions',
+                    mock.MagicMock(return_value=["a"])):
+      job = job_module.Job.New((_QuestStub(),), (change_a, change_b),
+                               comparison_mode=comparison_mode,
+                               bug_id=bug_id,
+                               arguments=arguments)
+      job.created = created
+      job.exception = exception
+      job.state.ScheduleWork()
+      job.state.Explore()
+      job.put()
+      return job
 
   @mock.patch.object(update_dashboard_stats, '_ProcessPinpointJobs',
                      mock.MagicMock(side_effect=_FakeTasklet))

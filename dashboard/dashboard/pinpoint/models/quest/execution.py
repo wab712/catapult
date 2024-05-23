@@ -8,12 +8,19 @@ from __future__ import absolute_import
 
 import traceback
 
-from oauth2client import client
-
 from dashboard.pinpoint.models import errors
+import logging
+import six
+
+from google.auth import exceptions
+TokenRefreshError = exceptions.RefreshError
+
+from google.appengine.api import datastore_errors
+
+DataStoreTimeoutError = datastore_errors.Timeout
 
 
-class Execution(object):
+class Execution:
   """Object tracking the execution of a Quest.
 
   An Execution object is created for each Quest when it starts running.
@@ -81,7 +88,7 @@ class Execution(object):
   # crbug.com/971370
   def __setstate__(self, state):
     self.__dict__ = state  # pylint: disable=attribute-defined-outside-init
-    if isinstance(self._exception, basestring):
+    if isinstance(self._exception, six.string_types):
       self._exception = {
           'message': self._exception.splitlines()[-1],
           'traceback': self._exception
@@ -94,7 +101,7 @@ class Execution(object):
         'details': self._AsDict(),
     }
 
-    if isinstance(self._exception, basestring):
+    if isinstance(self._exception, six.string_types):
       d['exception'] = {
           'message': self._exception.splitlines()[-1],
           'traceback': self._exception
@@ -119,11 +126,13 @@ class Execution(object):
 
     try:
       self._Poll()
-    except client.AccessTokenRefreshError as e:
+    except (TokenRefreshError, DataStoreTimeoutError) as e:
+      logging.warning('Execution failed with exception: %s', str(e))
       raise errors.RecoverableError(e)
-    except (errors.FatalError, RuntimeError):
+    except (errors.FatalError, RuntimeError) as e:
       # Some built-in exceptions are derived from RuntimeError which we'd like
       # to treat as errors.
+      logging.warning('Execution failed with exception: %s', str(e))
       raise
     except Exception as e:  # pylint: disable=broad-except
       # We allow broad exception handling here, because we log the exception and
@@ -132,10 +141,8 @@ class Execution(object):
       tb = traceback.format_exc()
       if hasattr(e, 'task_output'):
         tb += '\n%s' % getattr(e, 'task_output')
-      self._exception = {'message': e.message, 'traceback': tb}
-    except:
-      # All other exceptions must be propagated.
-      raise
+      self._exception = {'message': str(e), 'traceback': tb}
+      logging.warning('Execution failed with exception: %s', str(e))
 
   def _Poll(self):
     raise NotImplementedError()

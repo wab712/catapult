@@ -10,6 +10,8 @@ import shlex
 import subprocess
 import sys
 
+from PIL import ImageGrab  # pylint: disable=import-error
+
 from py_utils import cloud_storage  # pylint: disable=import-error
 
 from telemetry.internal.util import binary_manager
@@ -41,7 +43,7 @@ class LinuxPlatformBackend(
     posix_platform_backend.PosixPlatformBackend,
     linux_based_platform_backend.LinuxBasedPlatformBackend):
   def __init__(self):
-    super(LinuxPlatformBackend, self).__init__()
+    super().__init__()
 
   @classmethod
   def IsPlatformBackendForHost(cls):
@@ -90,15 +92,29 @@ class LinuxPlatformBackend(
     raise NotImplementedError('Unknown Linux OS version')
 
   def GetOSVersionDetailString(self):
-    return ''  # TODO(kbr): Implement this.
+    # First try os-release
+    for path in ('/etc/os-release', '/usr/lib/os-release'):
+      os_release = self._ReadReleaseFile(path)
+      if os_release:
+        codename = os_release.get('NAME', 'unknown_codename')
+        version = os_release.get('VERSION', 'unknown_version')
+        return codename + ' ' + version
+
+    # Use lsb-release as a fallback.
+    lsb_release = self._ReadReleaseFile('/etc/lsb-release')
+    if lsb_release:
+      return lsb_release.get('DISTRIB_DESCRIPTION')
+
+    raise NotImplementedError('Missing Linux OS name or version')
 
   def CanTakeScreenshot(self):
-    return_code = subprocess.call(['which', 'gnome-screenshot'])
-    return return_code == 0
+    return True
 
   def TakeScreenshot(self, file_path):
-    return_code = subprocess.call(['gnome-screenshot', '-f', file_path])
-    return return_code == 0
+    image = ImageGrab.grab(xdisplay=os.environ['DISPLAY'])
+    with open(file_path, 'wb') as f:
+      image.save(f, 'PNG')
+    return True
 
   def CanFlushIndividualFilesFromSystemCache(self):
     return True
@@ -114,7 +130,7 @@ class LinuxPlatformBackend(
   def CanLaunchApplication(self, application):
     if application == 'ipfw' and not self._IsIpfwKernelModuleInstalled():
       return False
-    return super(LinuxPlatformBackend, self).CanLaunchApplication(application)
+    return super().CanLaunchApplication(application)
 
   def InstallApplication(self, application):
     if application == 'ipfw':

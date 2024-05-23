@@ -10,11 +10,12 @@ import collections
 import datetime
 import logging
 import re
-import urlparse
+import six.moves.urllib.parse as urlparse
 
 from dashboard.pinpoint.models import errors
 from dashboard.pinpoint.models.change import commit_cache
 from dashboard.services import gerrit_service
+import six
 
 
 class GerritPatch(
@@ -128,10 +129,9 @@ class GerritPatch(
       KeyError: The patch doesn't exist or doesn't have the given revision.
       ValueError: The URL has an unrecognized format.
     """
-    if isinstance(data, basestring):
+    if isinstance(data, six.string_types):
       return cls.FromUrl(data)
-    else:
-      return cls.FromDict(data)
+    return cls.FromDict(data)
 
   @classmethod
   def FromUrl(cls, url):
@@ -152,7 +152,7 @@ class GerritPatch(
     server = urlparse.urlunsplit(
         (url_parts.scheme, url_parts.netloc, '', '', ''))
 
-    change_rev_match = re.match(r'^.*\/\+\/(\d+)(?:\/(\d+))?\/?$', url)
+    change_rev_match = re.match(r'^https.*\/\+\/(\d+)(?:\/(\d+))?\/?$', url)
     change_match = re.match(r'^\/(\d+)\/?$', url_parts.path)
     redirector_match = re.match(r'^/c/(\d+)(?:\/(\d+))?\/?$', url_parts.path)
     if change_rev_match:
@@ -198,14 +198,14 @@ class GerritPatch(
       patch_info = gerrit_service.GetChange(
           server, change, fields=('ALL_REVISIONS',))
     except gerrit_service.NotFoundError as e:
-      raise KeyError(str(e))
+      raise KeyError(str(e)) from e
     change = patch_info['id']
 
     # Revision can be a revision ID or numeric patch number.
     if not revision:
       revision = patch_info['current_revision']
     for revision_id, revision_info in patch_info['revisions'].items():
-      if revision == revision_id or revision == revision_info['_number']:
+      if revision in [revision_id, revision_info.get('_number')]:
         revision = revision_id
         break
     else:

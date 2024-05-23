@@ -72,7 +72,7 @@ def GetPlatformForDevice(device, finder_options, logging=real_logging):
     raise
 
 
-class Platform(object):
+class Platform():
   """The platform that the target browser is running on.
 
   Provides a limited interface to interact with the platform itself, where
@@ -212,6 +212,16 @@ class Platform(object):
     This function may require root or administrator access."""
     return self._platform_backend.FlushDnsCache()
 
+  def RestartTsProxyServerOnRemotePlatforms(self):
+    """Restarts the TsProxyServer on remote platforms.
+
+    If something goes wrong with the connection to the remote device (SSH, adb,
+    etc.), then the forwarder between the device and the host will potentially
+    break, breaking all further network connectivity. So, restart the server
+    and its forwarder.
+    """
+    self._platform_backend.RestartTsProxyServerOnRemotePlatforms()
+
   def LaunchApplication(self,
                         application,
                         parameters=None,
@@ -333,7 +343,6 @@ class Platform(object):
 
   def SetHTTPServerDirectories(self, paths, handler_class=None):
     """Returns True if the HTTP server was started, False otherwise."""
-    # pylint: disable=redefined-variable-type
     if isinstance(paths, six.string_types):
       paths = {paths}
     paths = set(os.path.realpath(p) for p in paths)
@@ -374,12 +383,6 @@ class Platform(object):
       real_logging.info('MemoryCacheHTTPServer created')
 
     self.StartLocalServer(server)
-    # For now, Fuchsia needs to do port forwarding due to --proxy-server
-    # flag not being supported in its browser.
-    # TODO(https://crbug.com/1014670): Remove once debug flags supported in
-    # Fuchsia browsers.
-    if self._platform_backend.GetOSName() == 'fuchsia':
-      self._platform_backend.forwarder_factory.Create(server.port, server.port)
     return True
 
   def StopAllLocalServers(self):
@@ -503,8 +506,7 @@ class Platform(object):
           float(tokens[col_time]) > skip_duration + sample_duration):
         break
       samples += 1
-      for ii in range(0, len(indices)):
-        index = indices[ii]
+      for ii, index in enumerate(indices):
         sums[ii] += float(tokens[index])
     results = {'samples': samples}
     if samples > 0:

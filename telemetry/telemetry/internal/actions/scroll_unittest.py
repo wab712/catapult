@@ -53,7 +53,7 @@ class ScrollActionTest(tab_test_case.TabTestCase):
 
     self._tab.ExecuteJavaScript(
         'document.body.style.height = "' + str(documentHeight) + 'px";')
-    self.assertEquals(
+    self.assertEqual(
         self._tab.EvaluateJavaScript('document.scrollingElement.scrollTop'), 0)
 
     # Allow for some visual viewport offset. For example, if the test doesn't
@@ -122,6 +122,7 @@ class ScrollActionTest(tab_test_case.TabTestCase):
 
   @decorators.Disabled('android-reference')  # crbug.com/934649
   @decorators.Disabled('win-reference')  # crbug.com/805523
+  @decorators.Disabled('chromeos')  # crbug.com/1450766
   def testWheelScrollDistanceWhileZoomed(self):
     # TODO(bokan): This API was added recently so only run the test once it's
     # available. Remove this check once it rolls into stable builds.
@@ -174,7 +175,7 @@ class ScrollActionTest(tab_test_case.TabTestCase):
   def testScrollAction(self):
 
     self._MakePageVerticallyScrollable()
-    self.assertEquals(
+    self.assertEqual(
         self._tab.EvaluateJavaScript('document.scrollingElement.scrollTop'), 0)
 
     i = scroll.ScrollAction()
@@ -202,11 +203,11 @@ class ScrollActionTest(tab_test_case.TabTestCase):
   @decorators.Disabled('chromeos')  # crbug.com/984016
   def testDiagonalScrollAction(self):
     self._MakePageVerticallyScrollable()
-    self.assertEquals(
+    self.assertEqual(
         self._tab.EvaluateJavaScript('document.scrollingElement.scrollTop'), 0)
 
     self._MakePageHorizontallyScrollable()
-    self.assertEquals(
+    self.assertEqual(
         self._tab.EvaluateJavaScript('document.scrollingElement.scrollLeft'), 0)
 
     i = scroll.ScrollAction(direction='downright')
@@ -232,11 +233,11 @@ class ScrollActionTest(tab_test_case.TabTestCase):
     # scrollable area being more than twice as tall as the viewport) would
     # result in a scroll location outside of the viewport bounds.
     self._MakePageVerticallyScrollable()
-    self.assertEquals(
+    self.assertEqual(
         self._tab.EvaluateJavaScript('document.scrollingElement.scrollTop'), 0)
 
     self._MakePageHorizontallyScrollable()
-    self.assertEquals(
+    self.assertEqual(
         self._tab.EvaluateJavaScript('document.scrollingElement.scrollLeft'), 0)
 
     self._tab.ExecuteJavaScript("""

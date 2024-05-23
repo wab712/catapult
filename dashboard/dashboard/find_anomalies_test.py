@@ -24,8 +24,8 @@ from dashboard.models import histogram
 from dashboard.models.subscription import Subscription
 from dashboard.models.subscription import VISIBILITY
 from dashboard.models.subscription import AnomalyConfig
-from tracing.value.diagnostics import reserved_infos
 from dashboard.sheriff_config_client import SheriffConfigClient
+from tracing.value.diagnostics import reserved_infos
 
 # pylint: disable=too-many-lines
 
@@ -71,26 +71,26 @@ _TEST_ROW_DATA = [
     (241529, 2143.5),
     (241532, 2145.5),
     (241535, 2147.0),
-    (241537, 2184.1),
-    (241546, 2180.8),
-    (241553, 2181.5),
-    (241559, 2176.8),
-    (241566, 2174.0),
-    (241577, 2182.8),
-    (241579, 2184.8),
-    (241582, 2190.5),
-    (241584, 2183.1),
-    (241609, 2178.3),
-    (241620, 2178.1),
-    (241645, 2190.8),
-    (241653, 2177.7),
-    (241666, 2185.3),
-    (241697, 2173.8),
-    (241716, 2172.1),
-    (241735, 2172.5),
-    (241757, 2174.7),
-    (241766, 2196.7),
-    (241782, 2184.1),
+    (241537, 2484.1),
+    (241546, 2480.8),
+    (241553, 2481.5),
+    (241559, 2476.8),
+    (241566, 2474.0),
+    (241577, 2482.8),
+    (241579, 2484.8),
+    (241582, 2490.5),
+    (241584, 2483.1),
+    (241609, 2478.3),
+    (241620, 2478.1),
+    (241645, 2490.8),
+    (241653, 2477.7),
+    (241666, 2485.3),
+    (241697, 2473.8),
+    (241716, 2472.1),
+    (241735, 2472.5),
+    (241757, 2474.7),
+    (241766, 2496.7),
+    (241782, 2484.1),
 ]
 
 
@@ -116,7 +116,7 @@ def _MakeSampleChangePoint(x_value, median_before, median_after):
   )
 
 
-class EndRevisionMatcher(object):
+class EndRevisionMatcher:
   """Custom matcher to test if an anomaly matches a given end rev."""
 
   def __init__(self, end_revision):
@@ -131,8 +131,11 @@ class EndRevisionMatcher(object):
     """Shows a readable revision which can be printed when assert fails."""
     return '<IsEndRevision %d>' % self._end_revision
 
+  def __hash__(self):
+    return hash(self._end_revision)
 
-class ModelMatcher(object):
+
+class ModelMatcher:
   """Custom matcher to check if two ndb entity names match."""
 
   def __init__(self, name):
@@ -147,6 +150,9 @@ class ModelMatcher(object):
     """Shows a readable revision which can be printed when assert fails."""
     return '<IsModel %s>' % self._name
 
+  def __hash__(self):
+    return hash(self._name)
+
 
 @ndb.tasklet
 def _MockTasklet(*_):
@@ -158,7 +164,7 @@ def _MockTasklet(*_):
 class ProcessAlertsTest(testing_common.TestCase):
 
   def setUp(self):
-    super(ProcessAlertsTest, self).setUp()
+    super().setUp()
     self.SetCurrentUser('foo@bar.com', is_admin=True)
 
   def _AddDataForTests(self, stats=None, masters=None):
@@ -189,6 +195,12 @@ class ProcessAlertsTest(testing_common.TestCase):
   def _DataSeries(self):
     return [(r.revision, r, r.value) for r in list(graph_data.Row.query())]
 
+  def _GetGroupsForAnomalyMock(self, anomaly_entity):
+    group_keys = alert_group.AlertGroup.GetGroupsForAnomaly(
+        anomaly_entity, None)
+    group_ids = [k.string_id() for k in group_keys]
+    return group_ids
+
   @mock.patch.object(find_anomalies.find_change_points, 'FindChangePoints',
                      mock.MagicMock(return_value=[
                          _MakeSampleChangePoint(10011, 50, 100),
@@ -197,6 +209,12 @@ class ProcessAlertsTest(testing_common.TestCase):
                      ]))
   @mock.patch.object(find_anomalies.email_sheriff, 'EmailSheriff')
   def testProcessTest(self, mock_email_sheriff):
+    perf_comment_post_patcher = mock.patch(
+        'dashboard.services.perf_issue_service_client.GetAlertGroupsForAnomaly',
+        self._GetGroupsForAnomalyMock)
+    perf_comment_post_patcher.start()
+    self.addCleanup(perf_comment_post_patcher.stop)
+
     self._AddDataForTests()
     test_path = 'ChromiumGPU/linux-release/scrolling_benchmark/ref'
     test = utils.TestKey(test_path).get()
@@ -204,6 +222,7 @@ class ProcessAlertsTest(testing_common.TestCase):
     test.put()
 
     alert_group_key1 = alert_group.AlertGroup(
+        id='group_id_1',
         name='scrolling_benchmark',
         domain='ChromiumGPU',
         subscription_name='sheriff1',
@@ -213,6 +232,7 @@ class ProcessAlertsTest(testing_common.TestCase):
             repository='chromium', start=10000, end=10070),
     ).put()
     alert_group_key2 = alert_group.AlertGroup(
+        id='group_id_2',
         name='scrolling_benchmark',
         domain='ChromiumGPU',
         subscription_name='sheriff2',
@@ -227,7 +247,7 @@ class ProcessAlertsTest(testing_common.TestCase):
     with mock.patch.object(SheriffConfigClient, 'Match',
                            mock.MagicMock(return_value=([s1, s2], None))) as m:
       find_anomalies.ProcessTests([test.key])
-      self.assertEqual(m.call_args_list, [mock.call(test.key.id())])
+      self.assertEqual(m.call_args_list[0], mock.call(test.key.id()))
     self.ExecuteDeferredTasks('default')
 
     expected_calls = [
@@ -417,7 +437,8 @@ class ProcessAlertsTest(testing_common.TestCase):
       find_anomalies.ProcessTests([test.key])
     self.ExecuteDeferredTasks('default')
 
-    query = graph_data.Row.query(projection=['revision', 'timestamp', 'value'])
+    query = graph_data.Row.query(
+        projection=['revision', 'timestamp', 'value', 'swarming_bot_id'])
     query = query.filter(graph_data.Row.revision > 10062)
     query = query.filter(
         graph_data.Row.parent_test == utils.OldStyleTestKey(test.key))
@@ -656,6 +677,31 @@ class ProcessAlertsTest(testing_common.TestCase):
     self.assertEqual(anomaly.UP, new_anomalies[0].direction)
     self.assertEqual(241533, new_anomalies[0].start_revision)
     self.assertEqual(241546, new_anomalies[0].end_revision)
+
+  def testProcessTest_BotIdBeforeAndAfterNotNoneAndDiffer_ignoreAnomaly(self):
+    testing_common.AddTests(['ChromiumGPU'], ['linux-release'], {
+        'scrolling_benchmark': {
+            'ref': {}
+        },
+    })
+    ref = utils.TestKey(
+        'ChromiumGPU/linux-release/scrolling_benchmark/ref').get()
+    test_container_key = utils.GetTestContainerKey(ref.key)
+    for idx, row in enumerate(_TEST_ROW_DATA):
+      graph_data.Row(
+          id=row[0],
+          value=row[1],
+          parent=test_container_key,
+          swarming_bot_id='device-id-%d' % idx).put()
+    ref.UpdateSheriff()
+    ref.put()
+    s = Subscription(name='sheriff', visibility=VISIBILITY.PUBLIC)
+    with mock.patch.object(SheriffConfigClient, 'Match',
+                           mock.MagicMock(return_value=([s], None))) as m:
+      find_anomalies.ProcessTests([ref.key])
+      self.assertEqual(m.call_args_list, [mock.call(ref.key.id())])
+    new_anomalies = anomaly.Anomaly.query().fetch()
+    self.assertEqual(0, len(new_anomalies))
 
   def testProcessTest_RefineAnomalyPlacement_OffByOneBefore(self):
     testing_common.AddTests(

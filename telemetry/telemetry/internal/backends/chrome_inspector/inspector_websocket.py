@@ -14,7 +14,6 @@ from telemetry.internal.backends.chrome_inspector import websocket
 
 class WebSocketDisconnected(exceptions.Error):
   """An attempt was made to use a web socket after it had been disconnected."""
-  pass
 
 
 class WebSocketException(exceptions.Error):
@@ -23,7 +22,7 @@ class WebSocketException(exceptions.Error):
   def __init__(self, websocket_error):
     msg = 'WebSocketException of type %s. Error message: %s' % (
         type(websocket_error), repr(websocket_error))
-    super(WebSocketException, self).__init__(msg)
+    super().__init__(msg)
     self._websocket_error_type = type(websocket_error)
 
   @property
@@ -31,7 +30,7 @@ class WebSocketException(exceptions.Error):
     return self._websocket_error_type
 
 
-class InspectorWebsocket(object):
+class InspectorWebsocket():
 
   # See http://www.jsonrpc.org/specification#error_object.
   METHOD_NOT_FOUND_CODE = -32601
@@ -117,7 +116,7 @@ class InspectorWebsocket(object):
       if logging.getLogger().isEnabledFor(logging.DEBUG):
         logging.debug('sent [%s]', json.dumps(req, indent=2, sort_keys=True))
     except websocket.WebSocketException as err:
-      raise WebSocketException(err)
+      raise WebSocketException(err) from err
 
   def SyncRequest(self, req, timeout):
     """Sends a request and waits for a response.
@@ -137,8 +136,8 @@ class InspectorWebsocket(object):
   def AsyncRequest(self, req, callback):
     """Sends an async request and returns immediately.
 
-    Response will be handled in the |callback| later when DispatchNotifications
-    is invoked.
+    This needs to be followed by explicit call to DispatchNotifications(), which
+    will wait for responses, and invoke |callback|.
 
     Args:
       callback: a function that takes inspector's response as the argument.
@@ -179,7 +178,7 @@ class InspectorWebsocket(object):
         else:
           raise
       except websocket.WebSocketException as err:
-        raise WebSocketException(err)
+        raise WebSocketException(err) from err
       else:
         break
 

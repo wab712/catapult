@@ -35,6 +35,7 @@ class AndroidPlatformBackendTest(unittest.TestCase):
 
     self.device_patcher = mock.patch.multiple(
         device_utils.DeviceUtils,
+        RunShellCommand = mock.MagicMock(return_value=[""]),
         HasRoot=mock.MagicMock(return_value=True),
         GetProp=mock.MagicMock(side_effect=get_prop))
     self.device_patcher.start()
@@ -166,7 +167,7 @@ class AndroidPlatformBackendTest(unittest.TestCase):
   @decorators.Disabled('chromeos', 'mac', 'win')
   def testPackageExtractionNotFound(self):
     backend = self.CreatePlatformBackendForTest()
-    self.assertEquals(
+    self.assertEqual(
         'com.google.android.apps.chrome',
         backend._ExtractLastNativeCrashPackageFromLogcat('no crash info here'))
 
@@ -179,10 +180,10 @@ class AndroidPlatformBackendTest(unittest.TestCase):
   @decorators.Disabled('chromeos', 'mac', 'win')
   def testPackageExtractionFromRealExample(self):
     backend = self.CreatePlatformBackendForTest()
-    self.assertEquals('com.google.android.apps.chrome',
-                      backend._ExtractLastNativeCrashPackageFromLogcat(
-                          self.GetExampleLogcat(),
-                          default_package_name='invalid'))
+    self.assertEqual(
+        'com.google.android.apps.chrome',
+        backend._ExtractLastNativeCrashPackageFromLogcat(
+            self.GetExampleLogcat(), default_package_name='invalid'))
 
   @decorators.Disabled('chromeos', 'mac', 'win')
   def testPackageExtractionWithProcessName(self):
@@ -191,9 +192,8 @@ class AndroidPlatformBackendTest(unittest.TestCase):
                              'crash_in_logcat_with_process_name.txt')
     with open(test_file) as f:
       logcat = f.read()
-    self.assertEquals(
-        "org.chromium.chrome",
-        backend._ExtractLastNativeCrashPackageFromLogcat(logcat))
+    self.assertEqual("org.chromium.chrome",
+                     backend._ExtractLastNativeCrashPackageFromLogcat(logcat))
 
   @decorators.Disabled('chromeos', 'mac', 'win')
   def testPackageExtractionWithTwoCrashes(self):
@@ -203,18 +203,18 @@ class AndroidPlatformBackendTest(unittest.TestCase):
     mutated_logcat = original_logcat.replace('com.google.android.apps.chrome',
                                              'com.android.chrome')
     concatenated_logcat = '\n'.join([original_logcat, mutated_logcat])
-    self.assertEquals(
+    self.assertEqual(
         'com.android.chrome',
         backend._ExtractLastNativeCrashPackageFromLogcat(concatenated_logcat))
 
 
 class AndroidPlatformBackendPsutilTest(unittest.TestCase):
 
-  class psutil_1_0(object):
+  class psutil_1_0():
     version_info = (1, 0)
     def __init__(self):
       self.set_cpu_affinity_args = []
-    class Process(object):
+    class Process():
       def __init__(self, parent):
         self._parent = parent
         self.name = 'adb'
@@ -223,11 +223,11 @@ class AndroidPlatformBackendPsutilTest(unittest.TestCase):
     def process_iter(self):
       return [self.Process(self)]
 
-  class psutil_2_0(object):
+  class psutil_2_0():
     version_info = (2, 0)
     def __init__(self):
       self.set_cpu_affinity_args = []
-    class Process(object):
+    class Process():
       def __init__(self, parent):
         self._parent = parent
         self.set_cpu_affinity_args = []

@@ -60,7 +60,7 @@ class FindTestBase(unittest.TestCase):
 
 class FindSystemTest(FindTestBase):
   def setUp(self):
-    super(FindSystemTest, self).setUp()
+    super().setUp()
     self._finder_stubs.sys.platform = 'win32'
     self._path_stubs.sys.platform = 'win32'
     self._util_stubs.sys.platform = 'win32'
@@ -95,7 +95,7 @@ class FindSystemTest(FindTestBase):
 
 class FindLocalBuildsTest(FindTestBase):
   def setUp(self):
-    super(FindLocalBuildsTest, self).setUp()
+    super().setUp()
     self._finder_stubs.sys.platform = 'win32'
     self._path_stubs.sys.platform = 'win32'
     self._util_stubs.sys.platform = 'win32'
@@ -124,7 +124,7 @@ class FindLocalBuildsTest(FindTestBase):
 
 class OSXFindTest(FindTestBase):
   def setUp(self):
-    super(OSXFindTest, self).setUp()
+    super().setUp()
     self._finder_stubs.sys.platform = 'darwin'
     self._path_stubs.sys.platform = 'darwin'
     self._util_stubs.sys.platform = 'darwin'
@@ -146,9 +146,8 @@ class OSXFindTest(FindTestBase):
       return
 
     types = self.DoFindAllTypes()
-    self.assertEquals(
-        set(types),
-        {
+    self.assertEqual(
+        set(types), {
             'debug', 'release', 'content-shell-debug', 'content-shell-release',
             'canary', 'system'
         })
@@ -206,7 +205,7 @@ class LinuxFindTest(fake_filesystem_unittest.TestCase):
         for browser in ['chrome', 'content_shell']:
           self.CreateBrowser('/src/out/%s/%s' % (target, browser))
 
-      self.assertEquals(
+      self.assertEqual(
           set(self.DoFindAllTypes()),
           {'debug', 'release', 'content-shell-debug', 'content-shell-release'})
     finally:
@@ -244,14 +243,14 @@ class LinuxFindTest(fake_filesystem_unittest.TestCase):
     for name in official_names:
       self.CreateBrowser('/opt/google/%s/chrome' % name)
 
-    self.assertEquals(set(self.DoFindAllTypes()), {'stable', 'beta', 'dev'})
+    self.assertEqual(set(self.DoFindAllTypes()), {'stable', 'beta', 'dev'})
 
   @decorators.Disabled('android')  # Test not applicable to Android
   def testFindAllSystem(self):
     self.CreateBrowser('/opt/google/chrome/chrome')
     os.symlink('/opt/google/chrome/chrome', '/usr/bin/google-chrome')
 
-    self.assertEquals(set(self.DoFindAllTypes()), {'system', 'stable'})
+    self.assertEqual(set(self.DoFindAllTypes()), {'system', 'stable'})
 
   @decorators.Disabled('android')  # Test not applicable to Android
   def testFindAllSystemIsBeta(self):
@@ -261,13 +260,13 @@ class LinuxFindTest(fake_filesystem_unittest.TestCase):
 
     google_chrome = [browser for browser in self.DoFindAll()
                      if browser.browser_type == 'system'][0]
-    self.assertEquals('/opt/google/chrome-beta',
-                      google_chrome._browser_directory)
+    self.assertEqual('/opt/google/chrome-beta',
+                     google_chrome._browser_directory)
 
 
 class WinFindTest(FindTestBase):
   def setUp(self):
-    super(WinFindTest, self).setUp()
+    super().setUp()
 
     self._finder_stubs.sys.platform = 'win32'
     self._path_stubs.sys.platform = 'win32'
@@ -288,13 +287,11 @@ class WinFindTest(FindTestBase):
       return
 
     types = self.DoFindAllTypes()
-    self.assertEquals(
-        set(types),
-        {
+    self.assertEqual(
+        set(types), {
             'debug', 'release', 'content-shell-debug', 'content-shell-release',
             'system', 'canary'
-        }
-    )
+        })
 
   def testFindAllWithExact(self):
     if not self.CanFindAvailableBrowsers():
@@ -302,13 +299,11 @@ class WinFindTest(FindTestBase):
 
     self._finder_options.browser_executable = 'c:\\tmp\\chrome.exe'
     types = self.DoFindAllTypes()
-    self.assertEquals(
-        set(types),
-        {
+    self.assertEqual(
+        set(types), {
             'exact', 'debug', 'release', 'content-shell-debug',
             'content-shell-release', 'system', 'canary'
-        }
-    )
+        })
 
   def testNoErrorWithUnrecognizedExecutableName(self):
     if not self.CanFindAvailableBrowsers():

@@ -4,19 +4,21 @@
 """The datastore models for upload tokens and related data."""
 from __future__ import absolute_import
 
+import datetime
 import logging
 import uuid
 
 from google.appengine.ext import ndb
 
 from dashboard.models import internal_only_model
+from dateutil.relativedelta import relativedelta
 
 # 10 minutes should be enough for keeping the data in memory because processing
 # histograms takes 3.5 minutes in the 90th percentile.
 _MEMCACHE_TIMEOUT = 60 * 10
 
 
-class State(object):
+class State:
   PENDING = 0
   PROCESSING = 1
   FAILED = 2
@@ -32,6 +34,7 @@ def StateToString(state):
     return 'FAILED'
   if state == State.COMPLETED:
     return 'COMPLETED'
+  return None
 
 
 class Token(internal_only_model.InternalOnlyModel):
@@ -79,7 +82,7 @@ class Token(internal_only_model.InternalOnlyModel):
   @classmethod
   def UpdateObjectState(cls, obj, state, error_message=None):
     if obj is None:
-      return
+      return None
     return obj.UpdateState(state, error_message)
 
   def UpdateState(self, state, error_message=None):
@@ -87,7 +90,7 @@ class Token(internal_only_model.InternalOnlyModel):
 
     self.state_ = state
     if error_message is not None:
-      # In some cases the error_message (e.message field) can actually be not
+      # In some cases the error_message (str(e) field) can actually be not
       # a string.
       self.error_message = str(error_message)
     self.put()
@@ -144,6 +147,13 @@ class Measurement(internal_only_model.InternalOnlyModel):
 
   histogram = ndb.KeyProperty(kind='Histogram', indexed=True, default=None)
 
+  @ndb.ComputedProperty
+  def expiry(self):  # pylint: disable=invalid-name
+    if self.update_time:
+      return self.update_time + relativedelta(years=3)
+
+    return datetime.datetime.utcnow() + relativedelta(years=3)
+
   @classmethod
   def GetByPath(cls, test_path, token_id):
     if test_path is None or token_id is None:
@@ -171,7 +181,7 @@ class Measurement(internal_only_model.InternalOnlyModel):
       return
     obj.state = state
     if error_message is not None:
-      # In some cases the error_message (e.message field) can actually be not
+      # In some cases the error_message (str(e) field) can actually be not
       # a string.
       obj.error_message = str(error_message)
     yield obj.put_async()

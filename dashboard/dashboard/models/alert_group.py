@@ -6,6 +6,7 @@ from __future__ import print_function
 from __future__ import division
 from __future__ import absolute_import
 
+import logging
 import uuid
 
 from google.appengine.ext import ndb
@@ -13,6 +14,8 @@ from google.appengine.ext import ndb
 # Move import of protobuf-dependent code here so that all AppEngine work-arounds
 # have a chance to be live before we import any proto code.
 from dashboard import sheriff_config_client
+
+NONOVERLAP_THRESHOLD = 100
 
 
 class RevisionRange(ndb.Model):
@@ -24,6 +27,10 @@ class RevisionRange(ndb.Model):
     if not b or self.repository != b.repository:
       return False
     return max(self.start, b.start) <= min(self.end, b.end)
+
+  def HasSmallNonoverlap(self, b):
+    return ((abs(self.start - b.start) + abs(self.end - b.end)) <=
+            NONOVERLAP_THRESHOLD)
 
 
 class BugInfo(ndb.Model):
@@ -38,23 +45,27 @@ class AlertGroup(ndb.Model):
   created = ndb.DateTimeProperty(indexed=False, auto_now_add=True)
   updated = ndb.DateTimeProperty(indexed=False, auto_now_add=True)
 
-  class Status(object):
+  class Status:
     unknown = 0
     untriaged = 1
     triaged = 2
     bisected = 3
     closed = 4
+    sandwiched = 5
 
   status = ndb.IntegerProperty(indexed=False)
 
-  class Type(object):
+  class Type:
     test_suite = 0
     logical = 1
     reserved = 2
+    test_suite_skia = 3
 
   group_type = ndb.IntegerProperty(
       indexed=False,
-      choices=[Type.test_suite, Type.logical, Type.reserved],
+      choices=[
+          Type.test_suite, Type.logical, Type.reserved, Type.test_suite_skia
+      ],
       default=Type.test_suite,
   )
   active = ndb.BooleanProperty(indexed=True)
@@ -67,17 +78,25 @@ class AlertGroup(ndb.Model):
   # duplicate.
   canonical_group = ndb.KeyProperty(indexed=True)
 
+  sandwich_verification_workflow_id = ndb.StringProperty(indexed=True)
+
   def IsOverlapping(self, b):
     return (self.name == b.name and self.domain == b.domain
             and self.subscription_name == b.subscription_name
             and self.project_id == b.project_id
             and self.group_type == b.group_type
-            and self.revision.IsOverlapping(b.revision))
+            and self.revision.IsOverlapping(b.revision)
+            and (self.revision.HasSmallNonoverlap(b.revision)
+                 if self.domain == 'ChromiumPerf' else True))
 
   @classmethod
   def GetType(cls, anomaly_entity):
     if anomaly_entity.alert_grouping:
       return cls.Type.logical
+
+    if anomaly_entity.source and anomaly_entity.source == 'skia':
+      return cls.Type.test_suite_skia
+
     return cls.Type.test_suite
 
   @classmethod
@@ -113,6 +132,9 @@ class AlertGroup(ndb.Model):
   @classmethod
   def GetGroupsForAnomaly(cls, anomaly_entity, subscriptions):
     names = anomaly_entity.alert_grouping or [anomaly_entity.benchmark_name]
+    if anomaly_entity.alert_grouping:
+      logging.warning('alert_grouping is still in use: %s',
+                      anomaly_entity.alert_grouping)
     group_type = cls.GetType(anomaly_entity)
     # all_possible_groups including all groups for the anomaly. Some of groups
     # may havn't been created yet.
@@ -126,9 +148,11 @@ class AlertGroup(ndb.Model):
         g1 for name in names
         for g1 in cls.Get(name, group_type)
         if any(g1.IsOverlapping(g2) for g2 in all_possible_groups)]
+    # Each of the all_possible_groups should either has overlap with an
+    # existing one, or be created.
     # If any of the group in the all_possible_groups doesn't overlap with any
     # of the existing group, we put it into a special group for creating the
-    # non-existent group in next iteration.
+    # non-existent group in next alert_group_workflow iteration.
     if not existing_groups or not all(
         any(g1.IsOverlapping(g2) for g2 in existing_groups)
         for g1 in all_possible_groups):
@@ -148,6 +172,6 @@ class AlertGroup(ndb.Model):
     return [g for g in query.fetch() if g.group_type == group_type]
 
   @classmethod
-  def GetAll(cls, active=True):
+  def GetAll(cls, active=True, group_type=Type.test_suite):
     groups = cls.query(cls.active == active).fetch()
-    return groups or []
+    return [g for g in groups if g.group_type == group_type] or []

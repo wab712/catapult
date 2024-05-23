@@ -8,10 +8,11 @@
 #
 # Usage: ./screen_finder.py path_to_video 0 0 --verbose
 
+from __future__ import absolute_import
 from __future__ import division
 
-from __future__ import absolute_import
 import copy
+import itertools
 import logging
 import os
 import sys
@@ -26,7 +27,7 @@ np = external_modules.ImportRequiredModule('numpy')
 cv2 = external_modules.ImportRequiredModule('cv2')
 
 
-class ScreenFinder(object):
+class ScreenFinder():
   """Finds and extracts device screens from video.
 
   Sample Usage:
@@ -121,7 +122,7 @@ class ScreenFinder(object):
     self._anglesm5 = None
 
     if not self._InitNextFrame():
-      logging.warn('Not enough frames in video feed!')
+      logging.warning('Not enough frames in video feed!')
       return
 
     self._height, self._width = self._frame.shape[:2]
@@ -238,25 +239,24 @@ class ScreenFinder(object):
       points and the lines that intersect there of all lines in the array that
       are more than 45 degrees apart."""
     intersections = np.empty((0, 3), np.float32)
-    for i in range(0, len(lines)):
-      for j in range(i + 1, len(lines)):
-        # Filter lines that are less than 45 (or greater than 135) degrees
-        # apart.
-        if not cv_util.AreLinesOrthogonal(lines[i], lines[j], (np.pi / 4.0)):
-          continue
-        ret, point = cv_util.FindLineIntersection(lines[i], lines[j])
-        point = np.float32(point)
-        if not ret:
-          continue
-        # If we know where the previous corners are, we can also filter
-        # intersections that are too far away from the previous corners to be
-        # where the screen has moved.
-        if self._prev_corners is not None and \
-           self._lost_corner_frames <= self.RESET_AFTER_N_BAD_FRAMES and \
-           not self._PointIsCloseToPreviousCorners(point):
-          continue
-        intersections = np.vstack((intersections,
-                                   np.array((point, lines[i], lines[j]))))
+    for line_i, line_j in itertools.combinations(lines, 2):
+      # Filter lines that are less than 45 (or greater than 135) degrees
+      # apart.
+      if not cv_util.AreLinesOrthogonal(line_i, line_j, (np.pi / 4.0)):
+        continue
+      ret, point = cv_util.FindLineIntersection(line_i, line_j)
+      point = np.float32(point)
+      if not ret:
+        continue
+      # If we know where the previous corners are, we can also filter
+      # intersections that are too far away from the previous corners to be
+      # where the screen has moved.
+      if (self._prev_corners is not None
+          and self._lost_corner_frames <= self.RESET_AFTER_N_BAD_FRAMES
+          and not self._PointIsCloseToPreviousCorners(point)):
+        continue
+      intersections = np.vstack((intersections, np.array(
+          (point, line_i, line_j))))
     return intersections
 
   def _PointIsCloseToPreviousCorners(self, point):
@@ -280,7 +280,7 @@ class ScreenFinder(object):
       return False
     return True
 
-  class CornerData(object):
+  class CornerData():
 
     def __init__(self, corner_index, corner_location, brightness_score, line1,
                  line2):
@@ -626,9 +626,9 @@ class ScreenFinder(object):
       # width/height of the cropped corner image may be 2 or 4. This is fine
       # though, as long as the width and height of the cropped corner are not
       # hard-coded anywhere.
-      corner_image = self._frame_edges[corner[1] - 1:corner[1] + 2,
-                                       corner[0] - 1:corner[0] + 2]
-      ret, p = self._FindExactCorner(i <= 1, i == 1 or i == 2, corner_image)
+      corner_image = self._frame_edges[int(corner[1]) - 1:int(corner[1]) + 2,
+                                       int(corner[0]) - 1:int(corner[0]) + 2]
+      ret, p = self._FindExactCorner(i <= 1, i in (1, 2), corner_image)
       if ret:
         if self.DEBUG:
           self._frame_edges[corner[1] - 1 + p[1]][corner[0] - 1 + p[0]] = 128
@@ -818,7 +818,7 @@ class ScreenFinder(object):
       if not np.isnan(corner[0]):
         cv2.putText(
             self._frame_debug, str(i), (int(corner[0]), int(corner[1])),
-            cv2.FONT_HERSHEY_COMPLEX_SMALL, 1, (255, 255, 0), 1, cv2.CV_AA)
+            cv2.FONT_HERSHEY_COMPLEX_SMALL, 1, (255, 255, 0), 1, cv2.LINE_AA)
         i += 1
     if final_corners is not None:
       for corner in final_corners:

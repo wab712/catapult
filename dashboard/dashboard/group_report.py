@@ -7,32 +7,36 @@ from __future__ import division
 from __future__ import absolute_import
 
 import json
+import logging
+import six
 
 from google.appengine.ext import ndb
 
 from dashboard import alerts
 from dashboard import chart_handler
 from dashboard import update_test_suites
+from dashboard.common import cloud_metric
 from dashboard.common import request_handler
 from dashboard.common import utils
 from dashboard.models import alert_group
 from dashboard.models import anomaly
 from dashboard.models import page_state
+from dashboard.services import perf_issue_service_client
+
+from flask import request, make_response
 
 # This is the max number of alerts to query at once. This is used in cases
 # when we may want to query more many more alerts than actually get displayed.
 _QUERY_LIMIT = 5000
 
 
-class GroupReportHandler(chart_handler.ChartHandler):
-  """Request handler for requests for group report page."""
+def GroupReportGet():
+  return request_handler.RequestHandlerRenderStaticHtml('group_report.html')
 
-  def get(self):
-    """Renders the UI for the group report page."""
-    self.RenderStaticHtml('group_report.html')
 
-  def post(self):
-    """Returns dynamic data for /group_report with some set of alerts.
+@cloud_metric.APIMetric("chromeperf", "/group_report")
+def GroupReportPost():
+  """Returns dynamic data for /group_report with some set of alerts.
 
     The set of alerts is determined by the sid, keys, bug ID, AlertGroup ID,
     or revision given.
@@ -48,57 +52,60 @@ class GroupReportHandler(chart_handler.ChartHandler):
     Outputs:
       JSON for the /group_report page XHR request.
     """
-    bug_id = self.request.get('bug_id')
-    project_id = self.request.get('project_id', 'chromium') or 'chromium'
-    rev = self.request.get('rev')
-    keys = self.request.get('keys')
-    hash_code = self.request.get('sid')
-    group_id = self.request.get('group_id')
+  bug_id = request.values.get('bug_id')
+  project_id = request.values.get('project_id', 'chromium') or 'chromium'
+  rev = request.values.get('rev')
+  keys = request.values.get('keys')
+  hash_code = request.values.get('sid')
+  group_id = request.values.get('group_id')
 
-    # sid takes precedence.
-    if hash_code:
-      state = ndb.Key(page_state.PageState, hash_code).get()
-      if state:
-        keys = json.loads(state.value)
+  # sid takes precedence.
+  if hash_code:
+    state = ndb.Key(page_state.PageState, hash_code).get()
+    if state:
+      keys = json.loads(state.value)
+  elif keys:
+    keys = keys.split(',')
+
+  try:
+    alert_list = None
+    if bug_id:
+      try:
+        alert_list, _, _ = anomaly.Anomaly.QueryAsync(
+            bug_id=bug_id, project_id=project_id,
+            limit=_QUERY_LIMIT).get_result()
+      except ValueError as e:
+        six.raise_from(
+            request_handler.InvalidInputError('Invalid bug ID "%s:%s".' %
+                                              (project_id, bug_id)), e)
     elif keys:
-      keys = keys.split(',')
+      alert_list = GetAlertsForKeys(keys)
+    elif rev:
+      alert_list = GetAlertsAroundRevision(rev)
+    elif group_id:
+      alert_list = GetAlertsForGroupID(group_id)
+    else:
+      raise request_handler.InvalidInputError('No anomalies specified.')
 
-    try:
-      alert_list = None
-      if bug_id:
-        try:
-          alert_list, _, _ = anomaly.Anomaly.QueryAsync(
-              bug_id=bug_id, project_id=project_id,
-              limit=_QUERY_LIMIT).get_result()
-        except ValueError:
-          raise request_handler.InvalidInputError('Invalid bug ID "%s:%s".' %
-                                                  (project_id, bug_id))
-      elif keys:
-        alert_list = GetAlertsForKeys(keys)
-      elif rev:
-        alert_list = GetAlertsAroundRevision(rev)
-      elif group_id:
-        alert_list = GetAlertsForGroupID(group_id)
-      else:
-        raise request_handler.InvalidInputError('No anomalies specified.')
+    alert_dicts = alerts.AnomalyDicts([
+        a for a in alert_list
+        if a.key.kind() == 'Anomaly' and a.source != 'skia'
+    ])
 
-      alert_dicts = alerts.AnomalyDicts(
-          [a for a in alert_list if a.key.kind() == 'Anomaly'])
+    values = {
+        'alert_list': alert_dicts,
+        'test_suites': update_test_suites.FetchCachedTestSuites(),
+    }
+    if bug_id:
+      values['bug_id'] = bug_id
+      values['project_id'] = project_id
+    if keys:
+      values['selected_keys'] = keys
+    chart_handler.GetDynamicVariables(values)
 
-      values = {
-          'alert_list': alert_dicts,
-          'test_suites': update_test_suites.FetchCachedTestSuites(),
-      }
-      if bug_id:
-        values['bug_id'] = bug_id
-        values['project_id'] = project_id
-      if keys:
-        values['selected_keys'] = keys
-      self.GetDynamicVariables(values)
-
-      self.response.out.write(json.dumps(values))
-    except request_handler.InvalidInputError as error:
-      self.response.out.write(json.dumps({'error': str(error)}))
+    return make_response(json.dumps(values))
+  except request_handler.InvalidInputError as error:
+    return make_response(json.dumps({'error': str(error)}))
 
 
 def GetAlertsAroundRevision(rev):
@@ -143,8 +150,9 @@ def GetAlertsForKeys(keys):
   # Errors that can be thrown here include ProtocolBufferDecodeError
   # in google.net.proto.ProtocolBuffer. We want to catch any errors here
   # because they're almost certainly urlsafe key decoding errors.
-  except Exception:
-    raise request_handler.InvalidInputError('Invalid Anomaly key given.')
+  except Exception as e:  # pylint: disable=broad-except
+    six.raise_from(
+        request_handler.InvalidInputError('Invalid Anomaly key given.'), e)
 
   requested_anomalies = utils.GetMulti(keys)
 
@@ -198,7 +206,14 @@ def GetAlertsForGroupID(group_id):
   if not group:
     raise request_handler.InvalidInputError('Invalid AlertGroup ID "%s".' %
                                             group_id)
-  return ndb.get_multi(group.anomalies)
+  anomalies = perf_issue_service_client.GetAnomaliesByAlertGroupID(group_id)
+  anomaly_keys = [ndb.Key('Anomaly', a) for a in anomalies]
+  if sorted(anomaly_keys) != sorted(group.anomalies):
+    logging.warning('Imparity found for GetAnomaliesByAlertGroupID. %s, %s',
+                    group.anomalies, anomaly_keys)
+    cloud_metric.PublishPerfIssueServiceGroupingImpariry(
+        'GetAnomaliesByAlertGroupID')
+  return ndb.get_multi(anomaly_keys)
 
 
 def _IsInt(x):

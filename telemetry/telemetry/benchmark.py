@@ -4,7 +4,7 @@
 
 from __future__ import absolute_import
 import logging
-import optparse
+import optparse  # pylint: disable=deprecated-module
 import six
 
 from telemetry import decorators
@@ -19,12 +19,11 @@ Info = decorators.Info
 
 # TODO(crbug.com/859524): remove this once we update all the benchmarks in
 # tools/perf to use Info decorator.
-Owner = decorators.Info # pylint: disable=invalid-name
+Owner = decorators.Info  # pylint: disable=invalid-name
 
 
 class InvalidOptionsError(Exception):
   """Raised for invalid benchmark options."""
-  pass
 
 
 class Benchmark(command_line.Command):
@@ -46,8 +45,8 @@ class Benchmark(command_line.Command):
     """Creates a new Benchmark.
 
     Args:
-      max_failures: The number of story run's failures before bailing
-          from executing subsequent page runs. If None, we never bail.
+      max_failures: The number of story run's failures before bailing from
+        executing subsequent page runs. If None, we never bail.
     """
     self._max_failures = max_failures
     # TODO: There should be an assertion here that checks that only one of
@@ -81,11 +80,18 @@ class Benchmark(command_line.Command):
         return True
     return False
 
-  def Run(self, finder_options):
-    """Do not override this method."""
-    finder_options.target_platforms = self.GetSupportedPlatformNames(
+  def Run(self, args):
+    """Do not override this method.
+
+    Args:
+      args: a browser_options.BrowserFinderOptions instance.
+
+    Returns:
+      An exit code from exit_codes module describing what happened.
+    """
+    args.target_platforms = self.GetSupportedPlatformNames(
         self.SUPPORTED_PLATFORMS)
-    return story_runner.RunBenchmark(self, finder_options)
+    return story_runner.RunBenchmark(self, args)
 
   @property
   def max_failures(self):
@@ -103,8 +109,8 @@ class Benchmark(command_line.Command):
       parser.add_option_group(group)
 
   @classmethod
-  def AddBenchmarkCommandLineArgs(cls, group):
-    del group  # unused
+  def AddBenchmarkCommandLineArgs(cls, parser):
+    del parser  # unused
 
   @classmethod
   def GetSupportedPlatformNames(cls, supported_platforms):
@@ -124,8 +130,8 @@ class Benchmark(command_line.Command):
     default_values = parser.get_default_values()
     invalid_options = [o for o in cls.options if not hasattr(default_values, o)]
     if invalid_options:
-      raise InvalidOptionsError(
-          'Invalid benchmark options: %s' % ', '.join(invalid_options))
+      raise InvalidOptionsError('Invalid benchmark options: %s' %
+                                ', '.join(invalid_options))
     parser.set_defaults(**cls.options)
 
   @classmethod
@@ -134,11 +140,9 @@ class Benchmark(command_line.Command):
 
   def CustomizeOptions(self, finder_options, possible_browser=None):
     """Add options that are required by this benchmark."""
-    pass
 
-  def SetExtraBrowserOptions(self, browser_options):
+  def SetExtraBrowserOptions(self, options):
     """Set extra browser command line options"""
-    pass
 
   def GetBugComponents(self):
     """Return the benchmark's Monorail component as a string."""
@@ -230,6 +234,11 @@ class Benchmark(command_line.Command):
       tbm_options.config.system_trace_config.EnableSysStatsCpu()
       tbm_options.config.system_trace_config.EnableFtraceCpu()
       tbm_options.config.system_trace_config.EnableFtraceSched()
+      logging.warning('Not running Perfetto profiling (callstack sampling) '
+                      'even though --experimental_system_data_sources was '
+                      'enabled. Please manually update the benchmark to '
+                      'override PerfBenchmarkWithProfiling, if profiling is '
+                      'needed.')
 
     if options and options.force_sideload_perfetto:
       assert tbm_options.config.enable_experimental_system_tracing
@@ -237,8 +246,11 @@ class Benchmark(command_line.Command):
 
     # TODO(crbug.com/1012687): Remove or adjust the following warnings as the
     # development of TBMv3 progresses.
-    tbmv3_metrics = [m[6:] for m in tbm_options.GetTimelineBasedMetrics()
-                     if m.startswith('tbmv3:')]
+    tbmv3_metrics = [
+        m[6:]
+        for m in tbm_options.GetTimelineBasedMetrics()
+        if m.startswith('tbmv3:')
+    ]
     if tbmv3_metrics:
       if legacy_json_format:
         logging.warning(
@@ -263,6 +275,7 @@ class Benchmark(command_line.Command):
 
     Args:
       options: a browser_options.BrowserFinderOptions instance
+
     Returns:
       |test()| if |test| is a PageTest class.
       Otherwise, a TimelineBasedMeasurement instance.

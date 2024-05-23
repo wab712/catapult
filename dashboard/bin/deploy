@@ -1,16 +1,13 @@
-#!/usr/bin/python
-# Copyright 2015 The Chromium Authors. All rights reserved.
+#!/usr/bin/python3
+# Copyright 2022 The Chromium Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
 import argparse
 import logging
 import os
-import shutil
 import subprocess
 import sys
-import tempfile
-import time
 
 
 def _AddToPathIfNeeded(path):
@@ -55,7 +52,7 @@ def Main(args, extra_args):
         os.mkdir(viewer_dir_path)
       except OSError:
         pass
-      with open(viewer_html_path, 'w') as f:
+      with open(viewer_html_path, 'wb') as f:
         from tracing_build import vulcanize_histograms_viewer
         s = vulcanize_histograms_viewer.VulcanizeHistogramsViewer()
         f.write(s.encode('utf-8'))

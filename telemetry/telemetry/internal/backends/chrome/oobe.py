@@ -14,9 +14,6 @@ import py_utils
 
 
 class Oobe(web_contents.WebContents):
-  def __init__(self, inspector_backend):
-    super(Oobe, self).__init__(inspector_backend)
-
   @staticmethod
   def Canonicalize(user, remove_dots=True):
     """Get rid of dots in |user| and add @gmail.com."""
@@ -83,7 +80,7 @@ class Oobe(web_contents.WebContents):
 
   def NavigateGuestLogin(self):
     """Logs in as guest."""
-    self._ExecuteOobeApi('Oobe.guestLoginForTesting')
+    self._ExecuteOobeApi('OobeAPI.loginAsGuest')
 
   def NavigateFakeLogin(self, username, password, gaia_id,
                         enterprise_enroll=False):
@@ -101,22 +98,17 @@ class Oobe(web_contents.WebContents):
     enrollment. |for_user_triggered_enrollment| should be False for remora
     enrollment."""
     # TODO(achuith): Get rid of this call. crbug.com/804216.
-    self._ExecuteOobeApi('Oobe.skipToLoginForTesting')
+    self._ExecuteOobeApi('OobeAPI.skipToLoginForTesting')
     if for_user_triggered_enrollment:
-      self._ExecuteOobeApi('Oobe.switchToEnterpriseEnrollmentForTesting')
+      self._ExecuteOobeApi('OobeAPI.advanceToScreen', 'enterprise-enrollment')
 
     url = self.EvaluateJavaScript("window.location.href")
     if url.startswith('chrome://oobe/gaia-signin'):
-      self.ExecuteJavaScript('Oobe.showAddUserForTesting()')
+      self._ExecuteOobeApi('OobeAPI.showGaiaDialog')
 
     py_utils.WaitFor(self._GaiaWebviewContext, 20)
     self._NavigateWebviewLogin(username, password,
                                wait_for_close=not enterprise_enroll)
-
-    if enterprise_enroll:
-      self.WaitForJavaScriptCondition(
-          'Oobe.isEnrollmentSuccessfulForTest()', timeout=120)
-      self._ExecuteOobeApi('Oobe.enterpriseEnrollmentDone')
 
   def _UnicornObfuscated(self, text):
     """Converts an email into an obfuscated email.
@@ -137,7 +129,7 @@ class Oobe(web_contents.WebContents):
                            parent_user, parent_pass):
     """Logs into a unicorn account."""
 
-    self._ExecuteOobeApi('Oobe.skipToLoginForTesting')
+    self._ExecuteOobeApi('OobeAPI.skipToLoginForTesting')
     py_utils.WaitFor(self._GaiaWebviewContext, 20)
     logging.info('Entering child credentials')
     self._NavigateWebviewLogin(child_user, child_pass, False)

@@ -15,7 +15,7 @@ class TestLinuxBackend(linux_based_platform_backend.LinuxBasedPlatformBackend):
   # pylint: disable=abstract-method
 
   def __init__(self):
-    super(TestLinuxBackend, self).__init__()
+    super().__init__()
     self._mock_files = {}
 
   def SetMockFile(self, filename, output):
@@ -36,4 +36,4 @@ class LinuxBasedPlatformBackendTest(unittest.TestCase):
     self.SetMockFileInBackend(backend, 'proc_meminfo', '/proc/meminfo')
     result = backend.GetSystemTotalPhysicalMemory()
     # 67479191552 == MemTotal * 1024
-    self.assertEquals(result, 67479191552)
+    self.assertEqual(result, 67479191552)

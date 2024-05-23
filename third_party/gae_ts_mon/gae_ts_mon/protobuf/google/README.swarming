@@ -13,8 +13,8 @@ for protobufs shown below (e.g. adding this file).
 
 Name: Protocol Buffers
 Short Name: protobuf
-Version: 3.6.1
-Revision: 48cb18e5c419ddd23d9badcfe4e9df7bde1979b2
+Version: 3.17.3
+Revision: 5500c72c5b616da9f0125bcfab513987a1226e2b
 Home-page: https://github.com/protocolbuffers/protobuf
 License: New BSD License
 
@@ -44,6 +44,7 @@ Revision: 943102cfb5fa8811a15a4c21bd12421aadb423b5
 Source: https://github.com/googleapis/googleapis/tree/943102cfb5fa8811a15a4c21bd12421aadb423b5/google/rpc
 Home-page: https://grpc.io/
 License: Apache License 2.0
+Shipped: yes
 
 Local modifications in ./rpc
 ```

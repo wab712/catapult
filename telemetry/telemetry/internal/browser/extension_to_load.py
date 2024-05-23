@@ -13,7 +13,7 @@ class ExtensionPathNonExistentException(Exception):
 class MissingPublicKeyException(Exception):
   pass
 
-class ExtensionToLoad(object):
+class ExtensionToLoad():
   def __init__(self, path, browser_type):
     if not os.path.isdir(path):
       raise ExtensionPathNonExistentException(
@@ -35,12 +35,10 @@ class ExtensionToLoad(object):
     if crx_id.HasPublicKey(self._path):
       # Calculate extension id from the public key.
       return crx_id.GetCRXAppID(os.path.realpath(self._path))
-    else:
-      # Calculate extension id based on the path on the device.
-      return crx_id.GetCRXAppID(
-          os.path.realpath(self._local_path),
-          from_file_path=True,
-          is_win_path=self._is_win)
+    # Calculate extension id based on the path on the device.
+    return crx_id.GetCRXAppID(os.path.realpath(self._local_path),
+                              from_file_path=True,
+                              is_win_path=self._is_win)
 
   @property
   def path(self):
@@ -56,4 +54,3 @@ class ExtensionToLoad(object):
   @local_path.setter
   def local_path(self, local_path):
     self._local_path = local_path
-

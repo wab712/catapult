@@ -79,7 +79,7 @@ class PossibleAndroidBrowser(possible_browser.PossibleBrowser):
 
   def __init__(self, browser_type, finder_options, android_platform,
                backend_settings, local_apk=None, target_os='android'):
-    super(PossibleAndroidBrowser, self).__init__(
+    super().__init__(
         browser_type, target_os, backend_settings.supports_tab_control)
     assert browser_type in FindAllBrowserTypes(), (
         'Please add %s to android_browser_finder.FindAllBrowserTypes' %
@@ -92,6 +92,8 @@ class PossibleAndroidBrowser(possible_browser.PossibleBrowser):
     self._flag_changer = None
     self._modules_to_install = None
     self._compile_apk = finder_options.compile_apk
+    self._finder_options = finder_options
+    self._browser_package = None
 
     if self._local_apk is None and finder_options.chrome_root is not None:
       self._local_apk = self._backend_settings.FindLocalApk(
@@ -131,6 +133,16 @@ class PossibleAndroidBrowser(possible_browser.PossibleBrowser):
     return self._backend_settings
 
   @property
+  def browser_package(self):
+    if not self._browser_package:
+      self._browser_package = self._backend_settings.package
+      if self._backend_settings.IsWebView():
+        self._browser_package = (
+            self._backend_settings.
+            GetEmbedderPackageName(self._finder_options))
+    return self._browser_package
+
+  @property
   def browser_directory(self):
     # On Android L+ the directory where base APK resides is also used for
     # keeping extracted native libraries and .odex. Here is an example layout:
@@ -142,7 +154,7 @@ class PossibleAndroidBrowser(possible_browser.PossibleBrowser):
     # startup benchmarks to flush OS pagecache for the native library, .odex and
     # the APK.
     apks = self._platform_backend.device.GetApplicationPaths(
-        self._backend_settings.package)
+        self.browser_package)
     # A package can map to multiple APKs if the package overrides the app on
     # the system image. Such overrides should not happen on perf bots. The
     # package can also map to multiple apks if splits are used. In all cases, we
@@ -154,7 +166,7 @@ class PossibleAndroidBrowser(possible_browser.PossibleBrowser):
 
   @property
   def profile_directory(self):
-    return self._platform_backend.GetProfileDir(self._backend_settings.package)
+    return self._platform_backend.GetProfileDir(self.browser_package)
 
   @property
   def last_modification_time(self):
@@ -178,21 +190,25 @@ class PossibleAndroidBrowser(possible_browser.PossibleBrowser):
     profile_files_to_copy = self._browser_options.profile_files_to_copy
     if not self._browser_options.profile_dir and not profile_files_to_copy:
       self._platform_backend.RemoveProfile(
-          self._backend_settings.package,
+          self.browser_package,
           self._backend_settings.profile_ignore_list)
       return
 
     with _ProfileWithExtraFiles(self._browser_options.profile_dir,
                                 profile_files_to_copy) as profile_dir:
-      self._platform_backend.PushProfile(self._backend_settings.package,
+      self._platform_backend.PushProfile(self.browser_package,
                                          profile_dir)
 
   def SetUpEnvironment(self, browser_options):
-    super(PossibleAndroidBrowser, self).SetUpEnvironment(browser_options)
+    super().SetUpEnvironment(browser_options)
     self._platform_backend.DismissCrashDialogIfNeeded()
     device = self._platform_backend.device
     startup_args = self.GetBrowserStartupArgs(self._browser_options)
     device.adb.Logcat(clear=True)
+
+    # Avoids a Chrome android permission dialog, see https://crbug.com/1498208.
+    device.GrantPermissions(self.browser_package,
+                            ['android.permission.POST_NOTIFICATIONS'])
 
     # use legacy commandline path if in compatibility mode
     self._flag_changer = flag_changer.FlagChanger(
@@ -206,12 +222,12 @@ class PossibleAndroidBrowser(possible_browser.PossibleBrowser):
     # Stop any existing browser found already running on the device. This is
     # done *after* setting the command line flags, in case some other Android
     # process manages to trigger Chrome's startup before we do.
-    self._platform_backend.StopApplication(self._backend_settings.package)
+    self._platform_backend.StopApplication(self.browser_package)
     self._SetupProfile()
 
     # Remove any old crash dumps
     self._platform_backend.device.RemovePath(
-        self._platform_backend.GetDumpLocation(self._backend_settings.package),
+        self._platform_backend.GetDumpLocation(self.browser_package),
         recursive=True, force=True)
 
   def _TearDownEnvironment(self):
@@ -249,10 +265,10 @@ class PossibleAndroidBrowser(possible_browser.PossibleBrowser):
           platform.machine())
 
     browser_backend = android_browser_backend.AndroidBrowserBackend(
-        self._platform_backend, self._browser_options,
+        self._platform_backend, self._finder_options,
         self.browser_directory, self.profile_directory,
-        self._backend_settings,
-        build_dir=self._build_dir)
+        self._backend_settings, build_dir=self._build_dir,
+        local_apk_path=self._local_apk)
     try:
       return browser.Browser(
           browser_backend, self._platform_backend, startup_args=(),
@@ -284,7 +300,7 @@ class PossibleAndroidBrowser(possible_browser.PossibleBrowser):
     # crashpad_stackwalker.py is hard-coded to look for a "Crashpad" directory
     # in the dump directory that it is provided.
     startup_args.append('--breakpad-dump-location=' + posixpath.join(
-        self._platform_backend.GetDumpLocation(self._backend_settings.package),
+        self._platform_backend.GetDumpLocation(self.browser_package),
         'Crashpad'))
 
     return startup_args
@@ -305,7 +321,7 @@ class PossibleAndroidBrowser(possible_browser.PossibleBrowser):
   def UpdateExecutableIfNeeded(self):
     # TODO(crbug.com/815133): This logic should belong to backend_settings.
     for apk in self._support_apk_list:
-      logging.warn('Installing %s on device if needed.', apk)
+      logging.warning('Installing %s on device if needed.', apk)
       self.platform.InstallApplication(apk)
 
     apk_name = self._backend_settings.GetApkName(
@@ -322,16 +338,17 @@ class PossibleAndroidBrowser(possible_browser.PossibleBrowser):
       self._platform_backend.device.SetWebViewFallbackLogic(False)
 
     if self._local_apk:
-      logging.warn('Installing %s on device if needed.', self._local_apk)
+      logging.warning('Installing %s on device if needed.', self._local_apk)
       self.platform.InstallApplication(
           self._local_apk, modules=self._modules_to_install)
       if self._compile_apk:
         package_name = apk_helper.GetPackageName(self._local_apk)
-        logging.warn('Compiling %s.', package_name)
+        logging.warning('Compiling %s.', package_name)
         self._platform_backend.device.RunShellCommand(
             ['cmd', 'package', 'compile', '-m', self._compile_apk, '-f',
              package_name],
-            check_return=True)
+            check_return=True,
+            timeout=120)
 
     sdk_version = self._platform_backend.device.build_version_sdk
     # Bundles are in the ../bin directory, so it's safer to just check the
@@ -342,17 +359,15 @@ class PossibleAndroidBrowser(possible_browser.PossibleBrowser):
          (is_monochrome and sdk_version < version_codes.Q)) and
         sdk_version >= version_codes.NOUGAT):
       package_name = apk_helper.GetPackageName(self._local_apk)
-      logging.warn('Setting %s as WebView implementation.', package_name)
+      logging.warning('Setting %s as WebView implementation.', package_name)
       self._platform_backend.device.SetWebViewImplementation(package_name)
 
   def GetTypExpectationsTags(self):
-    tags = super(PossibleAndroidBrowser, self).GetTypExpectationsTags()
+    tags = super().GetTypExpectationsTags()
     if 'webview' in self.browser_type:
       tags.append('android-webview')
     else:
       tags.append('android-not-webview')
-    if 'weblayer' in self.browser_type:
-      tags.append('android-weblayer')
     return tags
 
 
@@ -416,6 +431,7 @@ def _GetReferenceAndroidBrowser(android_platform, finder_options):
         android_platform,
         android_browser_backend_settings.ANDROID_CHROME,
         reference_build)
+  return None
 
 
 def _FindAllPossibleBrowsers(finder_options, android_platform):
@@ -440,10 +456,10 @@ def _FindAllPossibleBrowsers(finder_options, android_platform):
     try:
       backend_settings = next(
           b for b in ANDROID_BACKEND_SETTINGS if b.package == package_name)
-    except StopIteration:
+    except StopIteration as e:
       raise exceptions.UnknownPackageError(
           '%s specified by --browser-executable has an unknown package: %s' %
-          (finder_options.browser_executable, package_name))
+          (finder_options.browser_executable, package_name)) from e
 
     possible_browsers.append(PossibleAndroidBrowser(
         'exact',

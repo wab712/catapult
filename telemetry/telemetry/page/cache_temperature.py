@@ -36,14 +36,14 @@ HOT = 'hot'
 ALL_CACHE_TEMPERATURES = [ANY, COLD, WARM_BROWSER, HOT_BROWSER, WARM, HOT]
 
 
-class _MarkTelemetryInternal(object):
+class _MarkTelemetryInternal():
   def __init__(self, tab, identifier):
     self.tab = tab
     self.identifier = identifier
 
   def __enter__(self):
     # This marker must match the regexp in
-    # ChromeProcessHelper.findTelemetryInternalRanges_().
+    # ChromeModelHelper.findTelemetryInternalRanges_().
     self.tab.AddTimelineMarker('telemetry.internal.%s.start' % self.identifier)
     return self
 
@@ -71,7 +71,7 @@ def _WarmCache(page, tab, temperature):
     tab.StopAllServiceWorkers()
 
 
-class CacheManipulator(object):
+class CacheManipulator():
   RENDERER_TEMPERATURE = None
   BROWSER_TEMPERATURE = None
   @staticmethod
@@ -187,7 +187,7 @@ def EnsurePageCacheTemperature(page, browser, previous_page=None):
     if temperature == c.RENDERER_TEMPERATURE:
       c.PrepareRendererCache(page, browser.tabs[0], previous_page)
       return
-    elif temperature == c.BROWSER_TEMPERATURE:
+    if temperature == c.BROWSER_TEMPERATURE:
       c.PrepareBrowserCache(page, browser, previous_page)
       return
   raise NotImplementedError('Unrecognized cache temperature: %s' % temperature)

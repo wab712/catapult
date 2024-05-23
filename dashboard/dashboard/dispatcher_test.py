@@ -14,13 +14,14 @@ class DispatcherTest(unittest.TestCase):
 
   def testImport(self):
     # load_from_prod requires this:
-    os.environ['APPLICATION_ID'] = 'test-dot-chromeperf'
+    os.environ['APPLICATION_ID'] = 'testbed-test'
 
     # gae_ts_mon requires these:
     os.environ['CURRENT_MODULE_ID'] = ''
     os.environ['CURRENT_VERSION_ID'] = ''
 
-    from dashboard import dispatcher
+    # pylint: disable=import-outside-toplevel
+    from dashboard import dispatcher  # pylint: disable=unused-import
 
 
 if __name__ == '__main__':

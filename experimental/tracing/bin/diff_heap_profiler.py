@@ -1,13 +1,17 @@
-#!/usr/bin/env python
+#!/usr/bin/env vpython3
 # Copyright 2017 The Chromium Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
+from __future__ import absolute_import
+from __future__ import print_function
 import argparse
 import gzip
 import json
 import os
 import shutil
+import six
+from six.moves import zip
 
 _OUTPUT_DIR = 'output'
 _OUTPUT_GRAPH_DIR = os.path.join(_OUTPUT_DIR, 'graph')
@@ -50,14 +54,13 @@ class GraphDump(object):
 def OpenTraceFile(file_path, mode):
   if file_path.endswith('.gz'):
     return gzip.open(file_path, mode + 'b')
-  else:
-    return open(file_path, mode + 't')
+  return open(file_path, mode + 't')
 
 def FindMemoryDumps(filename):
   processes = {}
 
   with OpenTraceFile(filename, 'r') as f:
-    data = json.loads(f.read().decode('utf-8'))
+    data = json.loads(f.read())
 
     for event in data['traceEvents']:
       pid = event['pid']
@@ -75,12 +78,12 @@ def FindMemoryDumps(filename):
 
       if event['name'] == 'typeNames':
         process.types = {}
-        for type_id, t in event['args']['typeNames'].iteritems():
+        for type_id, t in six.iteritems(event['args']['typeNames']):
           process.types[int(type_id)] = t
 
       if event['name'] == 'stackFrames':
         process.stackframes = {}
-        for stack_id, s in event['args']['stackFrames'].iteritems():
+        for stack_id, s in six.iteritems(event['args']['stackFrames']):
           new_stackframe = {}
           new_stackframe['name'] = s['name']
           if 'parent' in s:
@@ -126,7 +129,8 @@ def FindMemoryDumps(filename):
           process.allocators = dump['heaps_v2']['allocators']
 
   # Remove processes with incomplete memory dump.
-  for pid, process in processes.items():
+  # Note: Calling list() otherwise we can't modify list while iterating.
+  for pid, process in list(processes.items()):
     if not (process.allocators and process.stackframes and process.types):
       del processes[pid]
 
@@ -146,7 +150,6 @@ def ResolveMemoryDumpFields(entries, stackframes, types):
     return types[type_id]
 
   for entry in entries:
-    # pylint: disable=redefined-variable-type
     # Stackframe may be -1 (18446744073709551615L) when not stackframe are
     # available.
     if entry.stackframe not in stackframes:
@@ -181,7 +184,7 @@ def IncrementHeapEntry(stack, count, size, typename, root):
 def CanonicalHeapEntries(root):
   total_count = 0
   total_size = 0
-  for child in root['children'].itervalues():
+  for child in six.itervalues(root['children']):
     total_count += child['count']
     total_size += child['size']
   root['count'] -= total_count
@@ -189,12 +192,12 @@ def CanonicalHeapEntries(root):
 
   for typename in root['count_by_type']:
     total_count_for_type = 0
-    for child in root['children'].itervalues():
+    for child in six.itervalues(root['children']):
       if typename in child['count_by_type']:
         total_count_for_type += child['count_by_type'][typename]
     root['count_by_type'][typename] -= total_count_for_type
 
-  for child in root['children'].itervalues():
+  for child in six.itervalues(root['children']):
     CanonicalHeapEntries(child)
 
 
@@ -216,13 +219,13 @@ def DumpTree(root, frame, output, threshold, size_threshold):
     output.write(' \"count\": \"%s\",' % root['count'])
   output.write(' \"children\": [')
   is_first = True
-  for frame, child in root['children'].items():
+  for child_frame, child in root['children'].items():
     if is_first:
       is_first = False
     else:
       output.write(',')
 
-    DumpTree(child, frame, output, threshold, size_threshold)
+    DumpTree(child, child_frame, output, threshold, size_threshold)
   output.write(']')
   output.write('}')
 
@@ -251,10 +254,10 @@ def GetEntries(heap, process):
       entries.append(entry)
 
   elif process.version == 2:
-    raw_entries = zip(process.allocators[heap]['counts'],
+    raw_entries = list(zip(process.allocators[heap]['counts'],
                       process.allocators[heap]['sizes'],
                       process.allocators[heap]['types'],
-                      process.allocators[heap]['nodes'])
+                      process.allocators[heap]['nodes']))
     for (raw_count, raw_size, raw_type, raw_stackframe) in raw_entries:
       entry = Entry()
       entry.count = raw_count
@@ -271,7 +274,7 @@ def GetEntries(heap, process):
 
 def FilterProcesses(processes, filter_by_name, filter_by_labels):
   remaining_processes = {}
-  for pid, process in processes.iteritems():
+  for pid, process in six.iteritems(processes):
     if filter_by_name and process.name != filter_by_name:
       continue
     if (filter_by_labels and
@@ -301,13 +304,13 @@ def FindRelevantProcesses(start_trace, end_trace,
   processes = []
   if not start_processes:
     # Only keep end-processes.
-    for pid, end_process in end_processes.iteritems():
+    for _, end_process in six.iteritems(end_processes):
       processes.append((None, end_process))
   elif match_by_labels:
     # Processes are paired based on name/labels.
-    for pid, end_process in end_processes.iteritems():
+    for _, end_process in six.iteritems(end_processes):
       matching_start_process = None
-      for pid, start_process in start_processes.iteritems():
+      for _, start_process in six.iteritems(start_processes):
         if (start_process.name == end_process.name and
             (start_process.name in ['Browser', 'GPU'] or
              start_process.labels == end_process.labels)):
@@ -339,7 +342,7 @@ def BuildGraphDumps(processes, threshold, size_threshold):
     pid = end_process.pid
     name = end_process.name if end_process.name else ''
     labels = end_process.labels if end_process.labels else ''
-    print 'Process[%d] %s: %s' % (pid, name, labels)
+    print('Process[%d] %s: %s' % (pid, name, labels))
 
     for heap in end_process.allocators:
       start_entries = GetEntries(heap, start_process)
@@ -378,7 +381,7 @@ def BuildGraphDumps(processes, threshold, size_threshold):
       leaks.sort(reverse=True, key=lambda k: k['size'])
 
       if leaks:
-        print '  %s: %d potential leaks found.' % (heap, len(leaks))
+        print('  %s: %d potential leaks found.' % (heap, len(leaks)))
         graph.leaks = leaks
         graph.leak_stackframes = len(leaks)
         for leak in leaks:

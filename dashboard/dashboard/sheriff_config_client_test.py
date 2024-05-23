@@ -24,7 +24,7 @@ _SAMPLE_LAYOUT = ('{ "my_test_suite/my_test": ["Foreground", '
                    mock.MagicMock(return_value=None))
 class SheriffConfigClientTest(testing_common.TestCase):
 
-  class _Response(object):
+  class _Response:
     # pylint: disable=invalid-name
 
     def __init__(self, ok, text):
@@ -37,7 +37,7 @@ class SheriffConfigClientTest(testing_common.TestCase):
     def status_code(self):
       return 200
 
-  class _Session(object):
+  class _Session:
 
     def __init__(self, response):
       self._response = response
@@ -164,7 +164,7 @@ class SheriffConfigClientTest(testing_common.TestCase):
                 "max_window_size": 200,
                 "min_segment_size": 6,
                 "min_absolute_change": 0,
-                "min_relative_change": 0.01,
+                "min_relative_change": 0.5,
                 "min_steppiness": 0.5,
                 "multiple_of_std_dev": 2.5
               }
@@ -188,7 +188,15 @@ class SheriffConfigClientTest(testing_common.TestCase):
             auto_merge_enable=False,
             auto_bisect_enable=False,
             monorail_project_id='non-chromium',
-            anomaly_configs=[subscription.AnomalyConfig(max_window_size=200)]),
+            anomaly_configs=[
+                subscription.AnomalyConfig(
+                    max_window_size=200,
+                    min_absolute_change=0.0,
+                    min_relative_change=0.5,
+                    min_segment_size=6,
+                    min_steppiness=0.5,
+                    multiple_of_std_dev=2.5)
+            ]),
     ]
     self.assertEqual(clt.Match('Foo2/a/Bar2/b'), (expected, None))
 

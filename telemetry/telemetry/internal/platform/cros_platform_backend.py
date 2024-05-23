@@ -4,20 +4,22 @@
 
 from __future__ import absolute_import
 import logging
+import shlex
 
 from telemetry import decorators
 from telemetry.core import cros_interface
 from telemetry.core import platform
 from telemetry.core import util
-from telemetry.internal.forwarders import cros_forwarder
+from telemetry.internal.forwarders import linux_based_forwarder
 from telemetry.internal.platform import cros_device
 from telemetry.internal.platform import linux_based_platform_backend
 
+CROS_INFO_PATH = '/etc/lsb-release'
 
 class CrosPlatformBackend(
     linux_based_platform_backend.LinuxBasedPlatformBackend):
   def __init__(self, device=None):
-    super(CrosPlatformBackend, self).__init__(device)
+    super().__init__(device)
     if device and not device.is_local:
       self._cri = cros_interface.CrOSInterface(
           device.host_name, device.ssh_port, device.ssh_identity)
@@ -46,7 +48,7 @@ class CrosPlatformBackend(
     return self._cri
 
   def _CreateForwarderFactory(self):
-    return cros_forwarder.CrOsForwarderFactory(self._cri)
+    return linux_based_forwarder.LinuxBasedForwarderFactory(self._cri)
 
   def GetRemotePort(self, port):
     if self._cri.local:
@@ -63,13 +65,12 @@ class CrosPlatformBackend(
   def HasBeenThermallyThrottled(self):
     raise NotImplementedError()
 
-  def RunCommand(self, args):
-    if not isinstance(args, list):
-      args = [args]
-    stdout, stderr = self._cri.RunCmdOnDevice(args)
+  def RunCommand(self, cmd):
+    if not isinstance(cmd, list):
+      cmd = [cmd]
+    stdout, stderr = self._cri.RunCmdOnDevice(cmd)
     if stderr:
-      raise IOError('Failed to run: cmd = %s, stderr = %s' %
-                    (str(args), stderr))
+      raise IOError('Failed to run: cmd = %s, stderr = %s' % (str(cmd), stderr))
     return stdout
 
   def StartCommand(self, args, cwd=None, quiet=False, connect_timeout=None):
@@ -99,11 +100,32 @@ class CrosPlatformBackend(
   def GetOSName(self):
     return 'chromeos'
 
-  def GetOSVersionName(self):
-    return ''  # TODO: Implement this.
+  def _ReadReleaseFile(self, file_path):
+    if not self.PathExists(file_path):
+      return None
 
+    release_data = {}
+    for line in self.GetFileContents(file_path).splitlines():
+      if '=' in line:
+        key, _, value = line.partition('=')
+        release_data[key] = ' '.join(shlex.split(value.strip()))
+    return release_data
+
+  @decorators.Cache
+  def GetOSVersionName(self):
+    lsb_release = self._ReadReleaseFile(CROS_INFO_PATH)
+    if lsb_release and 'CHROMEOS_RELEASE_NAME' in lsb_release:
+      return lsb_release.get('CHROMEOS_RELEASE_NAME')
+
+    raise NotImplementedError('Missing CrOS name in lsb-release')
+
+  @decorators.Cache
   def GetOSVersionDetailString(self):
-    return ''  # TODO(kbr): Implement this.
+    lsb_release = self._ReadReleaseFile(CROS_INFO_PATH)
+    if lsb_release and 'CHROMEOS_RELEASE_VERSION' in lsb_release:
+      return lsb_release.get('CHROMEOS_RELEASE_VERSION')
+
+    raise NotImplementedError('Missing CrOS version in lsb-release')
 
   def CanFlushIndividualFilesFromSystemCache(self):
     return True
@@ -130,7 +152,7 @@ class CrosPlatformBackend(
     return self._cri.TakeScreenshot(file_path)
 
   def GetTypExpectationsTags(self):
-    tags = super(CrosPlatformBackend, self).GetTypExpectationsTags()
+    tags = super().GetTypExpectationsTags()
     tags.append('desktop')
     if self.cri.local:
       tags.append('chromeos-local')

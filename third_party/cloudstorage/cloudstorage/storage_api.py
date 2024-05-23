@@ -18,13 +18,15 @@
 
 
 
+from __future__ import absolute_import
 __all__ = ['ReadBuffer',
            'StreamingBuffer',
           ]
 
 import collections
 import os
-import urlparse
+import six
+import six.moves.urllib.parse
 
 from . import api_utils
 from . import common
@@ -126,7 +128,7 @@ class _StorageApi(rest_api._RestApi):
       resp_tuple = yield super(_StorageApi, self).do_request_async(
           url, method=method, headers=headers, payload=payload,
           deadline=deadline, callback=callback)
-    except urlfetch.DownloadError, e:
+    except urlfetch.DownloadError as e:
       raise errors.TimeoutError(
           'Request to Google Cloud Storage timed out.', e)
 
@@ -185,7 +187,7 @@ class _StorageApi(rest_api._RestApi):
 
     for meta_data in file_list:
       xml_setting_list.append('<Component>')
-      for key, val in meta_data.iteritems():
+      for key, val in meta_data.items():
         xml_setting_list.append('<%s>%s</%s>' % (key, val, key))
       xml_setting_list.append('</Component>')
     xml_setting_list.append('</ComposeRequest>')
@@ -247,7 +249,7 @@ class ReadBuffer(object):
 
     status, headers, content = self._api.head_object(path)
     errors.check_status(status, [200], path, resp_headers=headers, body=content)
-    self._file_size = long(common.get_stored_content_length(headers))
+    self._file_size = int(common.get_stored_content_length(headers))
     self._check_etag(headers.get('etag'))
 
     self._buffer_future = None
@@ -407,7 +409,7 @@ class ReadBuffer(object):
 
     if self._buffer_future is None:
       self._request_next_buffer()
-    return ''.join(data_list)
+    return b''.join(data_list)
 
   def _remaining(self):
     return self._file_size - self._offset
@@ -700,7 +702,7 @@ class StreamingBuffer(object):
     loc = resp_headers.get('location')
     if not loc:
       raise IOError('No location header found in 201 response')
-    parsed = urlparse.urlparse(loc)
+    parsed = six.moves.urllib.parse.urlparse(loc)
     self._path_with_token = '%s?%s' % (self._path, parsed.query)
 
   def __getstate__(self):
@@ -750,8 +752,8 @@ class StreamingBuffer(object):
       TypeError: if data is not of type str.
     """
     self._check_open()
-    if not isinstance(data, str):
-      raise TypeError('Expected str but got %s.' % type(data))
+    if not isinstance(data, six.binary_type):
+      raise TypeError('Expected binary but got %s.' % type(data))
     if not data:
       return
     self._buffer.append(data)
@@ -834,7 +836,7 @@ class StreamingBuffer(object):
           tmp_buffer.append(head)
           tmp_buffer_len += len(head)
 
-      data = ''.join(tmp_buffer)
+      data = b''.join(tmp_buffer)
       file_len = '*'
       if finish and not self._buffered:
         file_len = self._written + len(data)

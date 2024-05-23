@@ -18,7 +18,7 @@ from dashboard.pinpoint import test
 class _Results2Test(test.TestCase):
 
   def setUp(self):
-    super(_Results2Test, self).setUp()
+    super().setUp()
 
     self._job_from_id = mock.MagicMock()
     patcher = mock.patch.object(results2.job_module, 'JobFromId',
@@ -36,7 +36,7 @@ class Results2GetTest(_Results2Test):
     self._SetJob(None)
 
     response = self.testapp.get('/api/results2/456', status=400)
-    self.assertIn('Error', response.body)
+    self.assertIn(b'Error', response.body)
 
   @mock.patch.object(results2.results2, 'GetCachedResults2',
                      mock.MagicMock(return_value=None))
@@ -79,6 +79,8 @@ class Results2GetTest(_Results2Test):
 
 
 @mock.patch.object(results2.results2, 'GenerateResults2')
+@mock.patch('dashboard.common.cloud_metric._PublishTSCloudMetric',
+            mock.MagicMock())
 class Results2GeneratorPostTest(_Results2Test):
 
   def testGet_CallsGenerate(self, mock_generate):
@@ -90,15 +92,15 @@ class Results2GeneratorPostTest(_Results2Test):
     mock_generate.side_effect = Results2Error('foo')
     self._SetJob(_JobStub('101112'))
 
-    response = self.testapp.post('/api/generate-results2/101112')
-    self.assertIn('foo', response.body)
+    response = self.testapp.post('/api/generate-results2/101112', status=400)
+    self.assertIn(b'foo', response.body)
 
 
-class _TaskStub(object):
+class _TaskStub:
   pass
 
 
-class _JobStub(object):
+class _JobStub:
 
   def __init__(self, job_id, started=True, task=None):
     self.job_id = job_id

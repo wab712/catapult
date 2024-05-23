@@ -24,13 +24,10 @@ DEFAULT_LOG_FORMAT = (
 
 class SeriallyExecutedBrowserTestCase(test_case.TestCase):
 
-  # Below is a reference to the typ.Runner instance. It will be used in
-  # member functions like GetExpectationsForTest() to get test information
-  # from the typ.Runner instance running the test.
-  _typ_runner = None
+  browser = None
 
   def __init__(self, methodName):
-    super(SeriallyExecutedBrowserTestCase, self).__init__(methodName)
+    super().__init__(methodName)
     self._private_methodname = methodName
 
   def shortName(self):
@@ -38,20 +35,29 @@ class SeriallyExecutedBrowserTestCase(test_case.TestCase):
     return self._private_methodname
 
   def set_artifacts(self, artifacts):
-    super(SeriallyExecutedBrowserTestCase, self).set_artifacts(artifacts)
+    super().set_artifacts(artifacts)
     artifact_logger.RegisterArtifactImplementation(artifacts)
 
   def setUp(self):
-    if hasattr(self, 'browser') and self.browser:
+    if self.browser and self.ShouldPerformMinidumpCleanupOnSetUp():
       self.browser.CleanupUnsymbolizedMinidumps()
 
   def tearDown(self):
-    if hasattr(self, 'browser') and self.browser:
+    if self.browser and self.ShouldPerformMinidumpCleanupOnTearDown():
       self.browser.CleanupUnsymbolizedMinidumps(fatal=True)
+
+  def ShouldPerformMinidumpCleanupOnSetUp(self):
+    return True
+
+  def ShouldPerformMinidumpCleanupOnTearDown(self):
+    return True
 
   @classmethod
   def Name(cls):
     return cls.__name__
+
+  def CanRunInParallel(self):
+    return False
 
   @classmethod
   def AddCommandlineArgs(cls, parser):
@@ -143,11 +149,11 @@ class SeriallyExecutedBrowserTestCase(test_case.TestCase):
       cls.browser = cls._browser_to_create.Create()
       specifiers = set(cls.GetPlatformTags(cls.browser) +
                        cls._browser_to_create.GetTypExpectationsTags())
-      if cls._typ_runner.has_expectations and specifiers:
+      if cls.child.has_expectations and specifiers:
         logging.info(
             'The following expectations condition tags were generated %s' %
             str(list(specifiers)))
-        cls._typ_runner.expectations.add_tags(specifiers)
+        cls.child.expectations.set_tags(specifiers)
     except Exception:
       cls._browser_to_create.CleanUpEnvironment()
       raise
@@ -183,6 +189,10 @@ class SeriallyExecutedBrowserTestCase(test_case.TestCase):
   @classmethod
   def UrlOfStaticFilePath(cls, file_path):
     return cls.platform.http_server.UrlOf(file_path)
+
+  @classmethod
+  def LocalhostUrlOfStaticFilePath(cls, file_path):
+    return cls.platform.http_server.LocalhostUrlOf(file_path)
 
   @classmethod
   def ExpectationsFiles(cls):
@@ -222,7 +232,7 @@ class SeriallyExecutedBrowserTestCase(test_case.TestCase):
     are no expectations files passed to typ, then a tuple of
     (set(['PASS']), False) should be returned from this function.
     """
-    exp = self.__class__._typ_runner.expectations_for(self)
+    exp = self.child.expectations_for(self)
     return exp.results, exp.should_retry_on_failure
 
   @classmethod
@@ -242,6 +252,18 @@ class SeriallyExecutedBrowserTestCase(test_case.TestCase):
     A list of tags derived from the Browser instance's platform member variable.
     """
     return browser.GetTypExpectationsTags()
+
+  @classmethod
+  def GetTagConflictChecker(cls):
+    """Gets the non-standard tag checking function to use.
+
+    Passed on to typ for use when parsing expectation files. The default value
+    of None will cause the default conflict checker to be used.
+
+    If overridden, the returned callable should take two tags as strings and
+    return a boolean indicating whether the two tags conflict or not.
+    """
+    return None
 
   @staticmethod
   def GetJSONResultsDelimiter():
@@ -309,10 +331,11 @@ def _GenerateTestMethod(based_method, args):
 
 
 _TEST_GENERATOR_PREFIX = 'GenerateTestCases_'
-_INVALID_TEST_NAME_RE = re.compile(r'[^a-zA-Z0-9_\.\\\/-]')
+# Accept any test name as long as it does not have whitespace or * in it.
+_VALID_TEST_NAME_RE = re.compile(r'^[^*\s]*$')
 
 def _ValidateTestMethodname(test_name):
-  assert not bool(_INVALID_TEST_NAME_RE.search(test_name))
+  assert _VALID_TEST_NAME_RE.search(test_name)
 
 
 def GenerateTestCases(test_class, finder_options):
@@ -325,7 +348,7 @@ def GenerateTestCases(test_class, finder_options):
       # subclasses, to avoid collisions with Python's unit test runner.
       raise Exception('Name collision with Python\'s unittest runner: %s' %
                       name)
-    elif name.startswith('Test'):
+    if name.startswith('Test'):
       # Pass these through for the time being. We may want to rethink
       # how they are handled in the future.
       test_cases.append(test_class(name))

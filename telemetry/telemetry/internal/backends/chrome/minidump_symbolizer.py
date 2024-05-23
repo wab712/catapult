@@ -18,7 +18,7 @@ from dependency_manager import exceptions as dependency_exceptions
 from telemetry.internal.util import local_first_binary_manager
 
 
-class MinidumpSymbolizer(object):
+class MinidumpSymbolizer():
   def __init__(self, os_name, arch_name, dump_finder, build_dir,
                symbols_dir=None):
     """Abstract class for handling all minidump symbolizing code.
@@ -76,7 +76,7 @@ class MinidumpSymbolizer(object):
       # This can be removed once fully switched to Python 3 by passing text=True
       # to the check_output call above.
       if not isinstance(output, six.string_types):
-        output = output.decode('utf-8')  # pylint: disable=redefined-variable-type
+        output = output.decode('utf-8')
       return output
     finally:
       if not self._symbols_dir:
@@ -187,7 +187,7 @@ class MinidumpSymbolizer(object):
     # Symbol dumping is somewhat I/O constrained, so use double the number of
     # logical cores on the system.
     process_limit = multiprocessing.cpu_count() * 2
-    while len(cmds) or len(processes):
+    while cmds or processes:
       # Clear any processes that have finished.
       processes_to_delete = []
       for p in processes:
@@ -200,7 +200,7 @@ class MinidumpSymbolizer(object):
       for p in processes_to_delete:
         del processes[p]
       # Add as many more processes as we can.
-      while len(processes) < process_limit and len(cmds):
+      while len(processes) < process_limit and cmds:
         cmd = cmds.pop(-1)
         p = subprocess.Popen(
             cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)

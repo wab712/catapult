@@ -7,7 +7,7 @@ import time
 from telemetry.util import image_util
 
 
-class InspectorPage(object):
+class InspectorPage():
   """Class that controls a page connected by an inspector_websocket.
 
   This class provides utility methods for controlling a page connected by an
@@ -124,18 +124,6 @@ class InspectorPage(object):
       self._navigated_frame_ids = None
       self._navigation_url = url
     self.WaitForNavigate(timeout)
-
-  def GetCookieByName(self, name, timeout=60):
-    """Returns the value of the cookie by the given |name|."""
-    request = {
-        'method': 'Page.getCookies'
-        }
-    res = self._inspector_websocket.SyncRequest(request, timeout)
-    cookies = res['result']['cookies']
-    for cookie in cookies:
-      if cookie['name'] == name:
-        return cookie['value']
-    return None
 
   def CaptureScreenshot(self, timeout=60):
     """Captures a screenshot of the visible web contents.

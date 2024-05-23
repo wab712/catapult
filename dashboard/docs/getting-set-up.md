@@ -2,9 +2,8 @@
 
 ## Prerequisites
 
-1. Make sure you have Python 2.7.x installed. Python 3.x is not supported.
-2. [Download the Google Cloud SDK.](https://cloud.google.com/sdk/downloads)
-3. Update the Cloud SDK and set the default project to your project ID by
+1. [Download the Google Cloud SDK.](https://cloud.google.com/sdk/downloads)
+2. Update the Cloud SDK and set the default project to your project ID by
    invoking the following commands:
    ```
    gcloud components update
@@ -13,8 +12,8 @@
    ```
    Replace `[PROJECT-ID]` with your project ID. For chromeperf.appspot.com,
    it's `chromeperf`.
-4. Make sure that gcloud is in your PATH.
-5. Make sure that you have installed
+3. Make sure that gcloud is in your PATH.
+4. Make sure that you have installed
 [protoc](https://github.com/protocolbuffers/protobuf).
 
 ## Running the tests
@@ -24,12 +23,10 @@ component tests, use `bin/run_dev_server_tests`.
 
 ## Running a local instance
 
-Run `bin/dev_server`; this sets up a temporary directory, adds links to
-required libraries, and calls `dev_appserver.py` on that directory.  By
-default, this starts a server on [localhost:8080](http://localhost:8080/).
+Running a local instance (i.e., a dev server) of the Performance Dashboard is
+no longer supported due to a python2 dependency in the appengine toolchain.
 
-To load sample graph or alert data from production, navigate to
-[/load\_from\_prod](http://localhost:8080/load_from_prod).
+To manually test your python server changes, deploy them to chromeperf-stage.
 
 ## Deploying to production
 

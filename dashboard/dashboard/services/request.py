@@ -9,8 +9,9 @@ from __future__ import absolute_import
 from six.moves import http_client
 import httplib2
 import json
+import logging
 import socket
-import urllib
+import six.moves.urllib.parse
 
 from google.appengine.api import memcache
 from google.appengine.api import urlfetch_errors
@@ -18,13 +19,14 @@ from google.appengine.api import urlfetch_errors
 from dashboard.common import utils
 
 _CACHE_DURATION = 60 * 60 * 24 * 7  # 1 week.
-_VULNERABILITY_PREFIX = ")]}'\n"
+_VULNERABILITY_PREFIX = b")]}'\n"
 
 
 class RequestError(http_client.HTTPException):
 
-  def __init__(self, msg, content):
-    super(RequestError, self).__init__(msg)
+  def __init__(self, msg, headers, content):
+    super().__init__(msg)
+    self.headers = headers
     self.content = content
 
 
@@ -38,7 +40,7 @@ def RequestJson(*args, **kwargs):
   See the documentation for Request() for details
   about the arguments and exceptions.
   """
-  content = Request(*args, **kwargs)
+  content = six.ensure_binary(Request(*args, **kwargs))
   if content.startswith(_VULNERABILITY_PREFIX):
     content = content[len(_VULNERABILITY_PREFIX):]
   return json.loads(content)
@@ -77,13 +79,17 @@ def Request(url,
         del parameters[key]
       if isinstance(value, bool):
         parameters[key] = str(value).lower()
-    url += '?' + urllib.urlencode(sorted(parameters.items()), doseq=True)
+    params = sorted(parameters.items())
+    url += '?' + six.moves.urllib.parse.urlencode(params, True)
 
   kwargs = {'method': method}
   if body:
     # JSON-encode the body.
     kwargs['body'] = json.dumps(body)
-    kwargs['headers'] = {'Content-Type': 'application/json'}
+    kwargs['headers'] = {
+        'Accept': 'application/json',
+        'Content-Type': 'application/json'
+    }
 
   if use_cache:
     content = memcache.get(key=url)
@@ -115,16 +121,18 @@ def _RequestAndProcessHttpErrors(url, use_auth, scope, **kwargs):
     http = utils.ServiceAccountHttp(timeout=60, scope=scope)
   else:
     http = httplib2.Http(timeout=60)
+  logging.info('url: %s; use_auth: %s; kwargs: %s', url, use_auth, kwargs)
 
   response, content = http.request(url, **kwargs)
 
   if response['status'] == '404':
+    logging.debug('Response headers: %s, body: %s', response, content)
     raise NotFoundError(
         'HTTP status code %s: %s' % (response['status'], repr(content[0:200])),
-        content)
+        response, content)
   if not response['status'].startswith('2'):
+    logging.debug('Response headers: %s, body: %s', response, content)
     raise RequestError(
         'Failure in request for `%s`; HTTP status code %s: %s' %
-        (url, response['status'], repr(content[0:200])), content)
-
+        (url, response['status'], repr(content[0:200])), response, content)
   return content

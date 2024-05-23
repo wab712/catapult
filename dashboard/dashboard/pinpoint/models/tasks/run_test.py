@@ -192,7 +192,7 @@ class PollSwarmingTaskAction(
 
 # Everything after this point aims to define an evaluator for the 'run_test'
 # tasks.
-class InitiateEvaluator(object):
+class InitiateEvaluator:
 
   def __init__(self, job):
     self.job = job
@@ -222,7 +222,7 @@ class InitiateEvaluator(object):
       # isolate inputs to Swarming.
       logging.error(('Found multiple dependencies for run_test; '
                      'picking a random input; task = %s'), task)
-    dep_value.update(dep_map.values()[0])
+    dep_value.update(list(dep_map.values())[0])
 
     if dep_value.get('status') == 'failed':
       task.payload.update({
@@ -250,9 +250,10 @@ class InitiateEvaluator(object):
       return [
           ScheduleTestAction(job=self.job, task=task, properties=properties)
       ]
+    return None
 
 
-class UpdateEvaluator(object):
+class UpdateEvaluator:
 
   def __init__(self, job):
     self.job = job
@@ -282,7 +283,7 @@ class UpdateEvaluator(object):
 class Evaluator(evaluators.SequenceEvaluator):
 
   def __init__(self, job):
-    super(Evaluator, self).__init__(
+    super().__init__(
         evaluators=(
             evaluators.FilteringEvaluator(
                 predicate=evaluators.All(evaluators.TaskTypeEq('run_test'),),
@@ -357,7 +358,7 @@ def ReportError(task, _, accumulator):
 class Validator(evaluators.FilteringEvaluator):
 
   def __init__(self):
-    super(Validator, self).__init__(
+    super().__init__(
         predicate=evaluators.TaskTypeEq('run_test'), delegate=ReportError)
 
 
@@ -401,7 +402,7 @@ def TestSerializer(task, _, accumulator):
 class Serializer(evaluators.FilteringEvaluator):
 
   def __init__(self):
-    super(Serializer, self).__init__(
+    super().__init__(
         predicate=evaluators.TaskTypeEq('run_test'), delegate=TestSerializer)
 
 

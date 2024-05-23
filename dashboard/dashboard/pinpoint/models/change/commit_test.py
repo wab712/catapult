@@ -302,13 +302,13 @@ deps = {
     self.assertEqual(c, expected)
 
     mock_put.assert_called_once_with(
-        expected.id_string,
+        'chromium@HEAD',
         mock.ANY,
         mock.ANY,
         mock.ANY,
         mock.ANY,
         mock.ANY,
-        memcache_timeout=1800)
+        memcache_timeout=60 * 60 * 10)
 
   def testFromDictFailureFromUnknownRepo(self):
     with self.assertRaises(KeyError):
@@ -385,7 +385,7 @@ class MidpointTest(test.TestCase):
     count = 0
     matcher = re.compile(r'^mc_\d+$')
     for midpoint in _Midpoints(start, end):
-      self.assertRegexpMatches(midpoint.git_hash, matcher)
+      self.assertRegex(midpoint.git_hash, matcher)
       count += 1
       self.assertLess(count, 100)
 

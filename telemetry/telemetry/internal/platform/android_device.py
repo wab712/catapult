@@ -30,7 +30,7 @@ class AndroidDevice(device.Device):
       'adb devices' command
   """
   def __init__(self, device_id):
-    super(AndroidDevice, self).__init__(
+    super().__init__(
         name='Android device %s' % device_id, guid=device_id)
     self._device_id = device_id
 
@@ -60,7 +60,7 @@ def GetDeviceSerials(denylist):
   preferred_device = os.environ.get('ANDROID_SERIAL')
   if preferred_device in device_serials:
     logging.warning(
-        'ANDROID_SERIAL is defined. Put %s in the first of the'
+        'ANDROID_SERIAL is defined. Put %s in the first of the '
         'discovered devices list.' % preferred_device)
     device_serials.remove(preferred_device)
     device_serials.insert(0, preferred_device)
@@ -134,7 +134,7 @@ def FindAllAvailableDevices(options):
   """Returns a list of available devices.
   """
   # Disable Android device discovery when remote testing a CrOS device
-  if options.cros_remote:
+  if options.remote:
     return []
 
   android_platform_options = options.remote_platform_options

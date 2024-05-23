@@ -100,6 +100,11 @@ class BrowserTestRunnerTest(unittest.TestCase):
              # We don't want the underlying tests to report their results to
              # ResultDB.
              '--disable-resultsink',
+             # These tests currently rely on some information sticking around
+              # between tests, so we need to use the older global process pool
+              # approach instead of having different pools scoped for
+              # parallel/serial execution.
+              '--use-global-pool',
             ] + extra_args)
     try:
       args = browser_test_runner.ProcessConfig(config, args)
@@ -110,9 +115,9 @@ class BrowserTestRunnerTest(unittest.TestCase):
       (actual_successes,
        actual_failures,
        actual_skips) = self._ExtractTestResults(self._test_result)
-      self.assertEquals(set(actual_failures), set(expected_failures))
-      self.assertEquals(set(actual_successes), set(expected_successes))
-      self.assertEquals(set(actual_skips), set(expected_skips))
+      self.assertEqual(set(actual_failures), set(expected_failures))
+      self.assertEqual(set(actual_successes), set(expected_successes))
+      self.assertEqual(set(actual_skips), set(expected_skips))
     finally:
       os.remove(temp_file_name)
 
@@ -405,23 +410,21 @@ class BrowserTestRunnerTest(unittest.TestCase):
           total_shards, shard_index, num_tests))
     # Make assertions about ranges
     num_tests_run = 0
-    for i in range(0, len(shard_indices)):
-      cur_indices = shard_indices[i]
+    for i, cur_indices in enumerate(shard_indices):
       num_tests_in_shard = len(cur_indices)
       if i < num_tests:
         self.assertGreater(num_tests_in_shard, 0)
         num_tests_run += num_tests_in_shard
       else:
         # Not enough tests to go around all of the shards.
-        self.assertEquals(num_tests_in_shard, 0)
+        self.assertEqual(num_tests_in_shard, 0)
 
     # Assert that we run all of the tests exactly once.
     all_indices = set()
-    for i in range(0, len(shard_indices)):
-      cur_indices = shard_indices[i]
+    for cur_indices in shard_indices:
       all_indices.update(cur_indices)
-    self.assertEquals(num_tests_run, num_tests)
-    self.assertEquals(num_tests_run, len(all_indices))
+    self.assertEqual(num_tests_run, num_tests)
+    self.assertEqual(num_tests_run, len(all_indices))
 
   def testShardsWithPrimeNumTests(self):
     for total_shards in range(1, 20):
@@ -474,8 +477,8 @@ class BrowserTestRunnerTest(unittest.TestCase):
         test_result = json.load(f)
       (actual_successes,
        actual_failures, _) = self._ExtractTestResults(test_result)
-      self.assertEquals(set(actual_failures), set(failures))
-      self.assertEquals(set(actual_successes), set(successes))
+      self.assertEqual(set(actual_failures), set(failures))
+      self.assertEqual(set(actual_successes), set(successes))
     finally:
       os.remove(temp_file_name)
 
@@ -546,45 +549,50 @@ class BrowserTestRunnerTest(unittest.TestCase):
   @decorators.Disabled('chromeos')  # crbug.com/696553
   def testSplittingShardsByTimes(self):
     temp_file_name = self.writeMockTestResultsFile()
-    # It seems that the sorting order of the first four tests above is:
-    #   passing_test_0, Test1, Test2, Test3
-    # This is probably because the relative order of the "fixed" tests
-    # (starting with "Test") and the generated ones ("passing_") is
-    # not well defined, and the sorting is stable afterward.  The
-    # expectations have been adjusted for this fact.
+    # Tests should be sorted first by runtime then by test name.
+    # Thus, the ordered tests to be sharded should be:
+    #   passing_test_0
+    #   Test3-1
+    #   passing_test_4-1
+    #   passing_test_8-5
+    #   passing_test_9
     try:
+      # Shard time: 6.5
       self.BaseShardingTest(4, 0, [], [
           'browser_tests.simple_sharding_test' +
           '.SimpleShardingTest.passing_test_0',
           'browser_tests.simple_sharding_test' +
-          '.SimpleShardingTest.passing_test_1',
+          '.SimpleShardingTest.passing_test_4',
           'browser_tests.simple_sharding_test' +
-          '.SimpleShardingTest.passing_test_5',
+          '.SimpleShardingTest.passing_test_8',
           'browser_tests.simple_sharding_test' +
           '.SimpleShardingTest.passing_test_9'
       ], temp_file_name)
+      # Shard time: 6
       self.BaseShardingTest(4, 1, [], [
           'browser_tests.simple_sharding_test' +
-          '.SimpleShardingTest.Test1',
-          'browser_tests.simple_sharding_test' +
-          '.SimpleShardingTest.passing_test_2',
-          'browser_tests.simple_sharding_test' +
-          '.SimpleShardingTest.passing_test_6'
-      ], temp_file_name)
-      self.BaseShardingTest(4, 2, [], [
-          'browser_tests.simple_sharding_test' +
-          '.SimpleShardingTest.Test2',
+          '.SimpleShardingTest.Test3',
           'browser_tests.simple_sharding_test' +
           '.SimpleShardingTest.passing_test_3',
           'browser_tests.simple_sharding_test' +
           '.SimpleShardingTest.passing_test_7'
       ], temp_file_name)
+      # Shard time: 6
+      self.BaseShardingTest(4, 2, [], [
+          'browser_tests.simple_sharding_test' +
+          '.SimpleShardingTest.Test2',
+          'browser_tests.simple_sharding_test' +
+          '.SimpleShardingTest.passing_test_2',
+          'browser_tests.simple_sharding_test' +
+          '.SimpleShardingTest.passing_test_6'
+      ], temp_file_name)
+      # Shard time: 6
       self.BaseShardingTest(4, 3, [], [
-          'browser_tests.simple_sharding_test.SimpleShardingTest.Test3',
+          'browser_tests.simple_sharding_test.SimpleShardingTest.Test1',
           'browser_tests.simple_sharding_test' +
-          '.SimpleShardingTest.passing_test_4',
+          '.SimpleShardingTest.passing_test_1',
           'browser_tests.simple_sharding_test' +
-          '.SimpleShardingTest.passing_test_8'
+          '.SimpleShardingTest.passing_test_5'
       ], temp_file_name)
     finally:
       os.remove(temp_file_name)
@@ -603,10 +611,10 @@ class BrowserTestRunnerTest(unittest.TestCase):
     temp_file_name = self.writeMockTestResultsFile()
     try:
       self.BaseShardingTest(
-          4, 3, [], ['passing_test_8'], temp_file_name,
+          4, 3, [], ['passing_test_5'], temp_file_name,
           opt_test_name_prefix=('browser_tests.'
                                 'simple_sharding_test.SimpleShardingTest.'),
-          opt_test_filter='passing_test_8',
+          opt_test_filter='passing_test_5',
           opt_filter_tests_after_sharding=True)
     finally:
       os.remove(temp_file_name)
@@ -615,9 +623,9 @@ class BrowserTestRunnerTest(unittest.TestCase):
   def testFilteringAfterSharding(self):
     temp_file_name = self.writeMockTestResultsFile()
     successes = [
-        'browser_tests.simple_sharding_test.SimpleShardingTest.Test1',
-        'browser_tests.simple_sharding_test.SimpleShardingTest.passing_test_2',
-        'browser_tests.simple_sharding_test.SimpleShardingTest.passing_test_6']
+        'browser_tests.simple_sharding_test.SimpleShardingTest.Test3',
+        'browser_tests.simple_sharding_test.SimpleShardingTest.passing_test_3',
+        'browser_tests.simple_sharding_test.SimpleShardingTest.passing_test_7']
     try:
       self.BaseShardingTest(
           4, 1, [], successes, temp_file_name,
@@ -627,11 +635,15 @@ class BrowserTestRunnerTest(unittest.TestCase):
       os.remove(temp_file_name)
 
   def testMedianComputation(self):
-    self.assertEquals(2.0, run_browser_tests._MedianTestTime(
-        {'test1': 2.0, 'test2': 7.0, 'test3': 1.0}))
-    self.assertEquals(2.0, run_browser_tests._MedianTestTime(
-        {'test1': 2.0}))
-    self.assertEquals(0.0, run_browser_tests._MedianTestTime({}))
+    self.assertEqual(
+        2.0,
+        run_browser_tests._MedianTestTime({
+            'test1': 2.0,
+            'test2': 7.0,
+            'test3': 1.0
+        }))
+    self.assertEqual(2.0, run_browser_tests._MedianTestTime({'test1': 2.0}))
+    self.assertEqual(0.0, run_browser_tests._MedianTestTime({}))
     self.assertEqual(4.0, run_browser_tests._MedianTestTime(
         {'test1': 2.0, 'test2': 6.0, 'test3': 1.0, 'test4': 8.0}))
 
@@ -646,10 +658,10 @@ class Algebra(
     yield 'testTwo', (3, 3)
 
   def Simple(self, x, y):
-    self.assertEquals(x, y)
+    self.assertEqual(x, y)
 
   def TestNumber(self):
-    self.assertEquals(0, 1)
+    self.assertEqual(0, 1)
 
 
 class ErrorneousGeometric(
@@ -662,10 +674,10 @@ class ErrorneousGeometric(
     yield 'testBasic', ('square', 'circle')
 
   def Compare(self, x, y):
-    self.assertEquals(x, y)
+    self.assertEqual(x, y)
 
   def TestAngle(self):
-    self.assertEquals(90, 450)
+    self.assertEqual(90, 450)
 
 
 class TestLoadAllTestModules(unittest.TestCase):
@@ -677,6 +689,7 @@ class TestLoadAllTestModules(unittest.TestCase):
         'telemetry.testing.browser_test_runner_unittest.Algebra.TestNumber')
     context.test_case_ids_to_run.add(
         'telemetry.testing.browser_test_runner_unittest.Algebra.testOne')
+    context.disable_cloud_storage_io = True
     context.Freeze()
     browser_test_context._global_test_context = context
     try:
@@ -684,9 +697,9 @@ class TestLoadAllTestModules(unittest.TestCase):
       # otherwise that would throw Exception.
       tests = serially_executed_browser_test_case.LoadAllTestsInModule(
           sys.modules[__name__])
-      self.assertEquals(
-          sorted([t.id() for t in tests]),
-          ['telemetry.testing.browser_test_runner_unittest.Algebra.TestNumber',
-           'telemetry.testing.browser_test_runner_unittest.Algebra.testOne'])
+      self.assertEqual(sorted([t.id() for t in tests]), [
+          'telemetry.testing.browser_test_runner_unittest.Algebra.TestNumber',
+          'telemetry.testing.browser_test_runner_unittest.Algebra.testOne'
+      ])
     finally:
       browser_test_context._global_test_context = None

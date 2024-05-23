@@ -411,6 +411,7 @@ class HmacAuthV4Handler(AuthHandler, HmacKeys):
         """
         canonical = []
 
+        normalized_headers = {}
         for header in headers_to_sign:
             c_name = header.lower().strip()
             raw_value = str(headers_to_sign[header])
@@ -418,8 +419,11 @@ class HmacAuthV4Handler(AuthHandler, HmacKeys):
                 c_value = raw_value.strip()
             else:
                 c_value = ' '.join(raw_value.strip().split())
-            canonical.append('%s:%s' % (c_name, c_value))
-        return '\n'.join(sorted(canonical))
+            normalized_headers[c_name] = c_value
+        
+        for key in sorted(normalized_headers):
+            canonical.append('%s:%s' % (key, normalized_headers[key]))
+        return '\n'.join(canonical)
 
     def signed_headers(self, headers_to_sign):
         l = ['%s' % n.lower().strip() for n in headers_to_sign]
@@ -612,8 +616,11 @@ class S3HmacAuthV4Handler(HmacAuthV4Handler, AuthHandler):
         # S3 does **NOT** do path normalization that SigV4 typically does.
         # Urlencode the path, **NOT** ``auth_path`` (because vhosting).
         path = urllib.parse.urlparse(http_request.path)
+        # urlparse might convert the path to unicode in python2.7.
+        # The urllib's quote function does not work well with unicode string.
+        path_str = six.ensure_str(path.path)
         # Because some quoting may have already been applied, let's back it out.
-        unquoted = urllib.parse.unquote(path.path)
+        unquoted = urllib.parse.unquote(path_str)
         # Requote, this time addressing all characters.
         encoded = urllib.parse.quote(unquoted, safe='/~')
         return encoded
@@ -1062,21 +1069,25 @@ def detect_potential_sigv4(func):
     return _wrapper
 
 
+def convert_to_bool(val):
+    if val is None or isinstance(val, bool):
+        return val
+    if val.lower() == 'true':
+        return True
+    elif val.lower() == 'false':
+        return False
+    return None
+
+
 def detect_potential_s3sigv4(func):
     def _wrapper(self):
-        if os.environ.get('S3_USE_SIGV4', False):
-            return ['hmac-v4-s3']
-
-        if boto.config.get('s3', 'use-sigv4', False):
-            return ['hmac-v4-s3']
-
-        if not hasattr(self, 'host'):
-            return func(self)
-
-        # Keep the old explicit logic in case somebody was adding to the list.
-        for test in SIGV4_DETECT:
-            if test in self.host:
-                return ['hmac-v4-s3']
+        # Check if flags are explicitly set.
+        env_use_sigv4_flag = os.environ.get('S3_USE_SIGV4')
+        cfg_use_sigv4_flag = boto.config.get('s3', 'use-sigv4')
+        for flag in env_use_sigv4_flag, cfg_use_sigv4_flag:
+            flag = convert_to_bool(flag)
+            if flag is not None:
+                return ['hmac-v4-s3'] if flag else func(self)
 
         # Use default for non-aws hosts. Adding a url scheme is necessary if
         # not present for urlparse to properly function.
@@ -1089,19 +1100,10 @@ def detect_potential_s3sigv4(func):
                 netloc.endswith('amazonaws.com.cn')):
             return func(self)
 
-        # Use the default for the global endpoint
-        if netloc.endswith('s3.amazonaws.com'):
-            return func(self)
-
-        # Use the default for regions that support sigv4 and sigv2
-        if any(test in self.host for test in S3_AUTH_DETECT):
-            return func(self)
-
         # Use anonymous if enabled.
         if hasattr(self, 'anon') and self.anon:
             return func(self)
 
-        # Default to sigv4 for aws hosts outside of regions that are known
-        # to support sigv2
+        # Default to sigv4 for aws hosts
         return ['hmac-v4-s3']
     return _wrapper

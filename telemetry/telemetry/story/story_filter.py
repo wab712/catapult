@@ -3,7 +3,7 @@
 # found in the LICENSE file.
 
 from __future__ import absolute_import
-import optparse
+import optparse  # pylint:disable=deprecated-module
 import os
 import logging
 import re
@@ -11,7 +11,7 @@ import re
 from telemetry.story import typ_expectations
 
 
-class _StoryMatcher(object):
+class _StoryMatcher():
   def __init__(self, pattern):
     self._regex = None
     if pattern:
@@ -32,7 +32,7 @@ class _StoryMatcher(object):
     return self and bool(self._regex.search(story.name))
 
 
-class _StoryTagMatcher(object):
+class _StoryTagMatcher():
   def __init__(self, tags_str):
     self._tags = [tag.strip() for tag in tags_str.split(',')
                  ] if tags_str else None
@@ -46,7 +46,7 @@ class _StoryTagMatcher(object):
     return self and bool(story.tags.intersection(self._tags))
 
 
-class StoryFilterFactory(object):
+class StoryFilterFactory():
   """This factory reads static global configuration for a StoryFilter.
 
   Static global configuration includes commandline flags and ProjectConfig.
@@ -178,7 +178,7 @@ class StoryFilterFactory(object):
     cls._run_abridged_story_set = args.run_abridged_story_set
 
 
-class StoryFilter(object):
+class StoryFilter():
   """Logic to decide whether to run, skip, or ignore stories."""
 
   def __init__(
@@ -210,13 +210,23 @@ class StoryFilter(object):
       assert isinstance(stories, list)
     self._stories = stories
 
+  def _ApplyShards(self, stories):
+    if self._shard_indexes:
+      return [stories[i] for i in self._GetSelectedIndexes(len(stories))]
+
+    if self._shard_begin_index < 0:
+      self._shard_begin_index = 0
+    if self._shard_end_index is None:
+      self._shard_end_index = len(stories)
+    return stories[self._shard_begin_index:self._shard_end_index]
+
   def FilterStories(self, stories):
     """Filters the given stories, using filters provided in the command line.
 
     This filter causes stories to become completely ignored, and therefore
     they will not show up in test results output.
 
-    Story sharding is done before exclusion and inclusion is done.
+    Story sharding is done after exclusion and inclusion.
 
     Args:
       stories: A list of stories.
@@ -240,15 +250,7 @@ class StoryFilter(object):
     if self._abridged_story_set_tag:
       stories = [story for story in stories
                  if self._abridged_story_set_tag in story.tags]
-    if self._shard_indexes:
-      stories = [stories[i] for i in self._GetSelectedIndexes(len(stories))]
-    else:
-      if self._shard_begin_index < 0:
-        self._shard_begin_index = 0
-      if self._shard_end_index is None:
-        self._shard_end_index = len(stories)
-      stories = stories[self._shard_begin_index:self._shard_end_index]
-    final_stories = []
+    included_stories = []
     for story in stories:
       # Exclude filters take priority.
       if self._exclude_tags.HasLabelIn(story):
@@ -259,8 +261,8 @@ class StoryFilter(object):
         continue
       if self._include_regex and not self._include_regex.HasMatch(story):
         continue
-      final_stories.append(story)
-    return final_stories
+      included_stories.append(story)
+    return self._ApplyShards(included_stories)
 
   def ShouldSkip(self, story):
     """Decides whether a story should be marked skipped.
@@ -280,9 +282,10 @@ class StoryFilter(object):
     if self._stories:
       if story.name in self._stories:
         if disabled:
-          logging.warn('Running story %s even though it is disabled because '
-                       'it was specifically asked for by name in the --story '
-                       'flag.', story.name)
+          logging.warning(
+              'Running story %s even though it is disabled because '
+              'it was specifically asked for by name in the --story '
+              'flag.', story.name)
         return ''
     if disabled and self._run_disabled_stories:
       logging.warning(

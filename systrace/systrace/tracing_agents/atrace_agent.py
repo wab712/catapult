@@ -3,12 +3,16 @@
 # found in the LICENSE file.
 
 from __future__ import print_function
+# TODO(https://crbug.com/1262296): Update this after Python2 trybots retire.
+# pylint: disable=deprecated-module
+import logging
 import optparse
 import platform
 import re
 import sys
 import threading
 import zlib
+import six
 
 import py_utils
 
@@ -101,8 +105,8 @@ def try_create_agent(config):
   # Check device SDK version.
   device_sdk_version = util.get_device_sdk_version()
   if device_sdk_version < version_codes.JELLY_BEAN_MR2:
-    print('Device SDK versions < 18 (Jellybean MR2) not supported.\n'
-          'Your device SDK version is %d.' % device_sdk_version)
+    logging.error('Device SDK versions < 18 (Jellybean MR2) not supported.\n'
+                  'Your device SDK version is %d.', device_sdk_version)
     return None
 
   return AtraceAgent(device_sdk_version,
@@ -161,7 +165,7 @@ def _construct_atrace_args(config, categories):
 class AtraceAgent(tracing_agents.TracingAgent):
 
   def __init__(self, device_sdk_version, tracing_path):
-    super(AtraceAgent, self).__init__()
+    super().__init__()
     self._device_sdk_version = device_sdk_version
     self._tracing_path = tracing_path
     self._adb = None
@@ -189,11 +193,13 @@ class AtraceAgent(tracing_agents.TracingAgent):
     self._categories = [x for x in self._categories.split(',') if
         x in avail_cats]
     if unavailable:
-      print('These categories are unavailable: ' + ' '.join(unavailable))
+      logging.warning('These categories are unavailable: %s',
+                      ' '.join(unavailable))
     self._device_utils = device_utils.DeviceUtils(config.device_serial_number)
     self._device_serial_number = config.device_serial_number
     self._tracer_args = _construct_atrace_args(config,
                                                self._categories)
+    logging.info('Tracer arguments: %s', self._tracer_args)
     self._device_utils.RunShellCommand(
         self._tracer_args + ['--async_start'], check_return=True)
     return True
@@ -248,27 +254,44 @@ class AtraceAgent(tracing_agents.TracingAgent):
     Note that prior to Api 23, --async-stop isn't working correctly. It
     doesn't stop tracing and clears trace buffer before dumping it rendering
     results unusable."""
+    compress_trace_data = '-z' in self._tracer_args
     if self._device_sdk_version < version_codes.MARSHMALLOW:
       is_trace_enabled_file = '%s/tracing_on' % self._tracing_path
       # Stop tracing first so new data won't arrive while dump is performed (it
       # may take a non-trivial time and tracing buffer may overflow).
       self._device_utils.WriteFile(is_trace_enabled_file, '0')
-      result = self._device_utils.RunShellCommand(
-          self._tracer_args + ['--async_dump'], raw_output=True,
-          large_output=True, check_return=True,
-          timeout=ADB_LARGE_OUTPUT_TIMEOUT)
+      # For compressed trace data, we don't want encoding when adb shell reads
+      # the temp output file. (crbug/1271668)
+      if compress_trace_data:
+        result = self._device_utils.RunShellCommand(
+            self._tracer_args + ['--async_dump'], raw_output=True,
+            large_output=True, check_return=True,
+            timeout=ADB_LARGE_OUTPUT_TIMEOUT,
+            encoding=None)
+      else:
+        result = self._device_utils.RunShellCommand(
+            self._tracer_args + ['--async_dump'], raw_output=True,
+            large_output=True, check_return=True,
+            timeout=ADB_LARGE_OUTPUT_TIMEOUT)
       # Run synchronous tracing for 0 seconds to stop tracing, clear buffers
       # and other state.
       self._device_utils.RunShellCommand(
           self._tracer_args + ['-t 0'], check_return=True)
     else:
       # On M+ --async_stop does everything necessary
-      result = self._device_utils.RunShellCommand(
-          self._tracer_args + ['--async_stop'], raw_output=True,
-          large_output=True, check_return=True,
-          timeout=ADB_LARGE_OUTPUT_TIMEOUT)
+      if compress_trace_data:
+        result = self._device_utils.RunShellCommand(
+            self._tracer_args + ['--async_stop'], raw_output=True,
+            large_output=True, check_return=True,
+            timeout=ADB_LARGE_OUTPUT_TIMEOUT,
+            encoding=None)
+      else:
+        result = self._device_utils.RunShellCommand(
+            self._tracer_args + ['--async_stop'], raw_output=True,
+            large_output=True, check_return=True,
+            timeout=ADB_LARGE_OUTPUT_TIMEOUT)
 
-    return result
+    return six.ensure_binary(result)
 
   def _collect_trace_data(self):
     """Reads the output from atrace and stops the trace."""
@@ -279,7 +302,7 @@ class AtraceAgent(tracing_agents.TracingAgent):
       data_start = data_start.end(0)
     else:
       raise IOError('Unable to get atrace data. Did you forget adb root?')
-    output = re.sub(ADB_IGNORE_REGEXP, '', result[data_start:])
+    output = re.sub(ADB_IGNORE_REGEXP, b'', result[data_start:])
     return output
 
   def _preprocess_trace_data(self, trace_data):
@@ -294,8 +317,7 @@ class AtraceAgent(tracing_agents.TracingAgent):
       trace_data = strip_and_decompress_trace(trace_data)
 
     if not trace_data:
-      print('No data was captured.  Output file was not written.',
-            file=sys.stderr)
+      logging.error('No data was captured.  Output file was not written.')
       sys.exit(1)
 
     if _FIX_MISSING_TGIDS:
@@ -325,7 +347,7 @@ def extract_tgids(trace_lines):
     result = re.match('^/proc/([0-9]+)/task/([0-9]+)', line)
     if result:
       parent_pid, tgid = result.group(1, 2)
-      tgid_2pid[tgid] = parent_pid
+      tgid_2pid[six.ensure_binary(tgid)] = six.ensure_binary(parent_pid)
 
   return tgid_2pid
 
@@ -351,6 +373,7 @@ def strip_and_decompress_trace(trace_data):
 
   if not trace_data.startswith(TRACE_TEXT_HEADER):
     # No header found, so assume the data is compressed.
+    logging.info('No header found. Will try to decompress the trace data.')
     trace_data = zlib.decompress(trace_data)
 
   # Enforce Unix line-endings.
@@ -375,17 +398,17 @@ def fix_missing_tgids(trace_data, pid2_tgid):
 
   def repl(m):
     tid = m.group(2)
-    if (int(tid) > 0 and m.group(1) != '<idle>' and m.group(3) == '(-----)'
+    if (int(tid) > 0 and m.group(1) != b'<idle>' and m.group(3) == b'(-----)'
         and tid in pid2_tgid):
       # returns Proc_name-PID (TGID)
       # Binder_2-381 (-----) becomes Binder_2-381 (128)
-      return m.group(1) + '-' + m.group(2) + ' ( ' + pid2_tgid[tid] + ')'
+      return m.group(1) + b'-' + m.group(2) + b' ( ' + pid2_tgid[tid] + b')'
 
     return m.group(0)
 
   # matches something like:
   # Binder_2-895 (-----)
-  trace_data = re.sub(r'^\s*(\S+)-(\d+)\s+(\(\S+\))', repl, trace_data,
+  trace_data = re.sub(br'^\s*(\S+)-(\d+)\s+(\(\S+\))', repl, trace_data,
                       flags=re.MULTILINE)
   return trace_data
 

@@ -20,11 +20,7 @@ from __future__ import print_function
 from __future__ import division
 from __future__ import absolute_import
 
-try:
-  import cPickle as pickle
-except ImportError:
-  # pickle in python 3 uses the c version as cPickle in python 2.
-  import pickle
+import pickle
 
 from google.appengine.ext import ndb
 
@@ -122,7 +118,7 @@ class MultipartEntity(ndb.Model):
         for i in range(self.size)
     ]
     part_entities = yield ndb.get_multi_async(part_keys)
-    serialized = ''.join(p.value for p in part_entities if p is not None)
+    serialized = b''.join(p.value for p in part_entities if p is not None)
     self.SetData(pickle.loads(serialized))
 
   @classmethod

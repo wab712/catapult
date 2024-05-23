@@ -12,6 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import inspect
+import json
+import os
 import sys
 import tempfile
 import unittest
@@ -23,6 +26,7 @@ from typ import Host, Runner, Stats, TestCase, TestSet, TestInput
 from typ import WinMultiprocessing
 from typ import runner as runner_module
 from typ.fakes import host_fake
+from typ.tests.stub_test_func import stub_test_func
 
 
 def _setup_process(child, context):  # pylint: disable=W0613
@@ -142,29 +146,143 @@ class RunnerTests(TestCase):
         self.assertEqual(ret, 0)
 
     def test_max_failures_fail_if_equal(self):
-      r = Runner()
-      r.args.tests = ['typ.tests.runner_test.FailureTests']
-      r.args.jobs = 1
-      r.args.typ_max_failures = 1
-      r.context = True
-      with self.assertRaises(RuntimeError):
-        r.run()
+        r = Runner()
+        r.args.tests = ['typ.tests.runner_test.FailureTests']
+        r.args.jobs = 1
+        r.args.typ_max_failures = 1
+        r.context = True
+        with self.assertRaises(RuntimeError):
+            r.run()
 
     def test_max_failures_pass_if_under(self):
-      r = Runner()
-      r.args.tests = ['typ.tests.runner_test.ContextTests', 'typ.tests.runner_test.FAilureTests']
-      r.args.jobs = 1
-      r.args.typ_max_failures = 2
-      r.context = True
-      r.run()
+        r = Runner()
+        r.args.tests = [
+            'typ.tests.runner_test.ContextTests',
+            'typ.tests.runner_test.FailureTests'
+        ]
+        r.args.jobs = 1
+        r.args.typ_max_failures = 2
+        r.context = False
+        r.run()
 
     def test_max_failures_ignored_if_unset(self):
-      r = Runner()
-      r.args.tests = ['typ.tests.runner_test.FailureTests']
-      r.args.jobs = 1
-      r.args.typ_max_failures = None
-      r.context = True
-      r.run()
+        r = Runner()
+        r.args.tests = ['typ.tests.runner_test.FailureTests']
+        r.args.jobs = 1
+        r.args.typ_max_failures = None
+        r.context = True
+        r.run()
+
+    def test_skip_test(self):
+        r = Runner()
+        r.args.tests = ['typ.tests.runner_test.SkipTests']
+        r.args.jobs = 1
+        ret, full_results, _ = r.run()
+        self.assertEqual(ret, 0)
+        self.assertEqual(
+            full_results['num_failures_by_type'],
+            {'FAIL': 0, 'TIMEOUT': 0, 'CRASH': 0, 'PASS': 0, 'SKIP': 1})
+        result = full_results['tests']['typ']['tests']['runner_test']['SkipTests']['test_skip']
+        self.assertEqual(result['expected'], 'SKIP')
+        self.assertEqual(result['actual'], 'SKIP')
+
+    def test_use_real_test_func_attribute(self):
+      fd, trace_filepath = tempfile.mkstemp(prefix='trace', suffix='.json')
+      os.close(fd)
+      test_name = ('typ.tests.runner_test.RealTestFuncTests'
+                   '.test_use_real_test_func_attribute')
+      try:
+        r = Runner()
+        r.args.tests = [test_name]
+        r.args.write_trace_to = trace_filepath
+        r.args.jobs = 1
+        r.args.typ_max_failures = None
+        r.context = True
+        r.run()
+
+        with open(trace_filepath, 'r') as f:
+          trace = json.load(f)
+        test_trace_event = [event for event in trace['traceEvents']
+                            if event['name'] == test_name][0]
+
+        actual_test_source_filepath = test_trace_event['args']['file']
+        actual_test_source_line = test_trace_event['args']['line']
+        expected_test_source_filepath = inspect.getsourcefile(stub_test_func)
+        expected_test_source_line = inspect.getsourcelines(stub_test_func)[1]
+
+        self.assertEqual(actual_test_source_filepath,
+                         expected_test_source_filepath)
+        self.assertEqual(actual_test_source_line,
+                         expected_test_source_line)
+      finally:
+        os.remove(trace_filepath)
+
+
+class FailureReasonExtractionTests(TestCase):
+    def test_basecase(self):
+        input = """Traceback (most recent call last):
+  File "C:\somepath\my_test.py", line 45, in testSomething
+    self.assertGreater(samples[0], 0, 'Sample from %s was not > 0' % name)
+AssertionError: 0 not greater than 0 : Sample from rasterize_time was not > 0
+"""
+        fr = runner_module._failure_reason_from_traceback(input)
+        self.assertIsNotNone(fr)
+        self.assertEqual(fr.primary_error_message,
+            'my_test.py(45): AssertionError: 0 not greater than 0 : Sample from rasterize_time was not > 0')
+
+    def test_not_extractable(self):
+        input = """Traceback (most recent call last):"""
+        fr = runner_module._failure_reason_from_traceback(input)
+        self.assertIsNone(fr)
+
+    def test_trailing_stderr(self):
+        input = """Traceback (most recent call last):
+  File "C:\somepath\my_test.py", line 45, in testSomething
+    self.assertSomething(...)
+AssertionError: Wanted "foo", got "bar"
+Stderr:
+This output should be ignored."""
+        fr = runner_module._failure_reason_from_traceback(input)
+        self.assertIsNotNone(fr)
+        self.assertEqual(fr.primary_error_message,
+            'my_test.py(45): AssertionError: Wanted "foo", got "bar"')
+
+    def test_trailing_stdout(self):
+        input = """Traceback (most recent call last):
+  File "C:\somepath\my_test.py", line 45, in testSomething
+    self.assertSomething(...)
+AssertionError: Wanted "foo", got "bar"
+Stdout:
+This output should be ignored.
+"""
+        fr = runner_module._failure_reason_from_traceback(input)
+        self.assertIsNotNone(fr)
+        self.assertEqual(fr.primary_error_message,
+            'my_test.py(45): AssertionError: Wanted "foo", got "bar"')
+
+    def test_chained_traceback(self):
+        input = """
+Traceback (most recent call last):
+  File "/b/s/w/ir/third_party/catapult/telemetry/telemetry/internal/browser/browser.py", line 145, in Close
+    if self._browser_backend.IsBrowserRunning():
+  File "/b/s/w/ir/third_party/catapult/telemetry/telemetry/core/cros_interface.py", line 481, in ListProcesses
+    assert stderr == '', stderr
+AssertionError: this message should not be extracted.
+
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/b/s/w/ir/third_party/catapult/common/py_utils/py_utils/exc_util.py", line 79, in Wrapper
+    func(*args, **kwargs)
+  File "/b/s/w/ir/third_party/catapult/telemetry/telemetry/core/cros_interface.py", line 481, in ListProcesses
+    assert stderr == '', stderr
+AssertionError: ssh: connect to host 127.0.0.1 port 9222: Connection timed out
+"""
+        fr = runner_module._failure_reason_from_traceback(input)
+        self.assertIsNotNone(fr)
+        self.assertEqual(fr.primary_error_message,
+            'cros_interface.py(481): AssertionError: ssh: connect to host 127.0.0.1 port 9222: Connection timed out')
 
 
 class TestSetTests(TestCase):
@@ -331,3 +449,23 @@ class FailureTests(TestCase):
         if self.context:
             self.fail()
 
+
+class SkipTests(TestCase):
+    def test_skip(self):
+        self.programmaticSkipIsExpected = True
+        self.skipTest('Skipped test')
+
+
+def test_func(self):
+    # This test is mostly intended to be called by
+    # RunnerTests.test_use_real_test_func_attribute, above.
+    # It is not interesting on its own.
+    pass
+
+
+class RealTestFuncTests(TestCase):
+    pass
+
+
+setattr(test_func, 'real_test_func', stub_test_func)
+setattr(RealTestFuncTests, 'test_use_real_test_func_attribute', test_func)
